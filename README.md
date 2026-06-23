@@ -1,71 +1,76 @@
 # dartscore
 
 Self-hosted automatic scoring for steel-tip darts, built for a Raspberry Pi wired
-to a projector. A YOLOv8 detector (candle, added in a later phase) does one narrow
-job — from a single frame return four board calibration points and up to three dart
-tips — and **everything downstream is deterministic Rust**: homography, board
-mapping, score classification, game logic, and web UI.
+to a projector. A YOLOv8 detector (candle) does one narrow job — from a single
+frame return four board calibration points and up to three dart tips — and
+**everything downstream is deterministic Rust**: homography, board mapping, score
+classification, game logic, persistence, and a web UI served from the same binary.
 
 ## Status
 
 | Phase | Scope | State |
 |------|-------|-------|
-| 2 | Geometry + homography + scoring (pure Rust) | ✅ implemented |
-| 0/1 | DeepDarts training + candle inference parity | planned |
+| 2 | Geometry + homography + scoring (pure Rust) | ✅ |
+| 0/1 | DeepDarts training (Python) + candle inference | ✅ pipeline; ⏳ weights/parity |
+| 4 | Axum/WebSocket server, X01/Cricket engine, SeaORM/Postgres history, Vue SPA | ✅ |
 | 3 | Camera capture + trigger | planned |
-| 4 | Axum/WebSocket web UI, X01/Cricket, corrections | planned |
 | 5 | Retrain loop on own data | planned |
 
-See `../../../.claude/plans/` for the full phased plan.
+Detector: **YOLOv8n via candle** (5 frozen classes: 4 calibration corners + dart).
+ONNX/`ort` with YOLO26 is the documented fallback if Pi latency ever demands it.
 
-## Architecture
+## Components
 
 ```
-src/
-  geometry.rs    board constants, number ring, polar -> (segment, ring) classify
-  homography.rs  4-point DLT homography (nalgebra), warp points
-  scoring.rs     detection (calib pts + tips) -> Vec<Score>
-  detect.rs      candle YOLOv8 inference            (Phase 1, planned)
-  capture.rs     camera ingest + trigger            (Phase 3, planned)
-  game/          X01 / Cricket engine               (Phase 4, planned)
-  web.rs         Axum + WebSocket + SPA serve       (Phase 4, planned)
-  main.rs        CLI: score | detect | capture | serve
+src/                 Rust crate `dartscore`
+  geometry.rs        board constants, number ring, polar -> (segment, ring)
+  homography.rs      4-point DLT homography (nalgebra)
+  scoring.rs         detection (calib pts + tips) -> Vec<Score>
+  game/              X01 + Cricket engines, roster (pure Rust, fully tested)
+  detect/            candle YOLOv8n inference (feature `detection`)
+  db/                SeaORM entities, migrations, repository (Postgres)
+  web/               Axum HTTP + WebSocket server (real-time game state)
+  main.rs            CLI: score | detect | capture | serve
+web/                 Vue 3 + TS SPA (projector UI); embedded via rust-embed
+python/              offline training + .pt->safetensors conversion (dev GPU)
+docs/protocol.md     authoritative WS/REST contract
 ```
 
-Board geometry uses the WDF/BDO regulation spec: radii measured to the wire,
-20 segments of 18° with the segment boundaries offset 9° from the cardinal axes,
-number ring `20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5` clockwise from top.
+Board geometry: WDF/BDO spec, 20 segments of 18° with boundaries offset 9° from
+the cardinal axes, ring `20,1,18,4,13,6,10,15,2,17,3,19,7,16,8,11,14,9,12,5`.
 
-## Usage
-
-Score a detection frame (four calibration points + dart tips, in image pixels):
+## Quick start
 
 ```sh
-make run ARGS="score examples/detection.json"
-# dart 1: InnerBull 25 -> 50
-# dart 2: Treble 20 -> 60
-# dart 3: Single 6 -> 6
-# total: 116
+# 1. Score a detection frame offline (no model/camera needed)
+make run ARGS="score examples/detection.json"     # -> total: 116
+
+# 2. Run the full app (web UI + WebSocket + history)
+make db-up                                          # local Postgres via docker
+make web                                            # build the SPA to web/dist
+DATABASE_URL=postgres://dartscore:dartscore@localhost:5432/dartscore make serve
+# open http://localhost:8080
 ```
 
-The JSON schema matches `dartscore::Detection`: `calibration` is four points in
-fixed order (5&20 top, 13&6 right, 17&3 bottom, 8&11 left), `tips` is the list of
-detected dart tips.
+The web client (`docs/protocol.md`) drives play over a WebSocket and persists
+finished games + a saved-player roster to Postgres. The release binary embeds the
+SPA (rust-embed), so deployment to the Pi is a single file — build the frontend
+*before* `make release`/`make cross`.
 
 ## Commands
 
 | `make` target | What it does |
 |---------------|--------------|
-| `make build` / `make release` | Compile (debug / release) |
-| `make run ARGS="..."` | Run the CLI |
-| `make test` | All tests |
-| `make unit` | In-crate unit tests only |
-| `make integration` | `tests/` integration tests only |
-| `make lint` | `cargo clippy --all-targets -D warnings` |
-| `make fmt` / `make fmt-check` | Format / check formatting |
-| `make cross` | Cross-compile for the Pi (`ARM_CPU=cortex-a53` RPi3 / `cortex-a76` RPi5) |
-| `make clean` | Remove build artifacts |
+| `build` / `release` | Compile (release builds the SPA + embeds it) |
+| `run ARGS="..."` / `serve` | Run the CLI / the web server |
+| `web` / `web-install` | Build / install the Vue SPA |
+| `db-up` / `db-down` | Start / stop local Postgres |
+| `detect` | Build with the candle detection feature |
+| `test` / `unit` / `integration` | Tests (all / lib / `tests/`) |
+| `lint` / `fmt` / `fmt-check` | clippy `-D warnings` / rustfmt |
+| `cross` | Cross-compile for the Pi (`ARM_CPU=cortex-a53` RPi3 / `cortex-a76` RPi5) |
 
-Cross-compilation requires [`cross`](https://github.com/cross-rs/cross). candle on
-ARM uses the default CPU backend (NEON via the `gemm` crate) — do **not** enable
-`mkl`/`accelerate`/`cuda`/`metal` features (x86/Apple/NVIDIA only).
+Detection training/conversion lives in `python/` (see `python/README.md`); the
+single artifact crossing to the Pi is `models/dartscore.safetensors`. candle on
+ARM uses the default CPU backend (NEON via `gemm`) — do **not** enable
+`mkl`/`accelerate`/`cuda`/`metal` features.

@@ -62,6 +62,61 @@ pub struct Score {
     pub value: u32,
 }
 
+impl Score {
+    pub fn single(n: u8) -> Self {
+        Self {
+            ring: Ring::Single,
+            segment: n,
+            value: n as u32,
+        }
+    }
+    pub fn double(n: u8) -> Self {
+        Self {
+            ring: Ring::Double,
+            segment: n,
+            value: n as u32 * 2,
+        }
+    }
+    pub fn treble(n: u8) -> Self {
+        Self {
+            ring: Ring::Treble,
+            segment: n,
+            value: n as u32 * 3,
+        }
+    }
+    pub fn bull() -> Self {
+        Self {
+            ring: Ring::OuterBull,
+            segment: 25,
+            value: 25,
+        }
+    }
+    pub fn double_bull() -> Self {
+        Self {
+            ring: Ring::InnerBull,
+            segment: 25,
+            value: 50,
+        }
+    }
+    pub fn miss() -> Self {
+        Self {
+            ring: Ring::Miss,
+            segment: 0,
+            value: 0,
+        }
+    }
+
+    /// A double for finishing purposes — the double ring or the (double) bull.
+    pub fn is_double(&self) -> bool {
+        matches!(self.ring, Ring::Double | Ring::InnerBull)
+    }
+
+    /// A treble — only the treble ring.
+    pub fn is_treble(&self) -> bool {
+        matches!(self.ring, Ring::Treble)
+    }
+}
+
 /// Resolve the segment number (1–20) for a point's angle.
 ///
 /// Angle is measured clockwise from the +y axis (top). `round` snaps to the

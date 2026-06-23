@@ -1,0 +1,26 @@
+# YOLOv8 dataset config for dartscore.
+#
+# THE CLASS LAYOUT IS FROZEN — it must match `NUM_CLASSES` and the calibration
+# order in the Rust crate (src/detect.rs) and the canonical calibration points
+# in src/geometry.rs. Do NOT reorder or add/remove classes without updating both
+# sides; candle reimplements the network head with this exact class count.
+#
+# Calibration corners are the outer-double-edge intersections, in canonical order:
+#   0 cal_top    = boundary of segments 5 & 20  (top)
+#   1 cal_right  = boundary of segments 13 & 6   (right)
+#   2 cal_bottom = boundary of segments 17 & 3   (bottom)
+#   3 cal_left   = boundary of segments 8 & 11    (left)
+#   4 dart       = dart tip
+
+path: datasets/dartscore   # root, relative to where you run training
+train: images/train
+val: images/val
+test: images/test
+
+nc: 5
+names:
+  0: cal_top
+  1: cal_right
+  2: cal_bottom
+  3: cal_left
+  4: dart

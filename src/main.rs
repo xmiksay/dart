@@ -23,14 +23,11 @@ enum Command {
         /// Path to a JSON file matching the `Detection` schema.
         input: PathBuf,
     },
-    /// Run YOLOv8 inference on an image (Phase 1).
-    Detect {
-        #[allow(dead_code)]
-        image: PathBuf,
-    },
+    /// Run YOLOv8 inference on an image (Phase 1; needs `--features detection`).
+    Detect { image: PathBuf },
     /// Capture from the camera and score live (Phase 3).
     Capture,
-    /// Serve the web UI and game engine (Phase 4).
+    /// Serve the web UI + WebSocket game server (Phase 4).
     Serve,
 }
 
@@ -44,16 +41,25 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Score { input } => cmd_score(&input),
-        Command::Detect { .. } => {
-            anyhow::bail!("`detect` is not implemented yet (Phase 1: candle inference)")
-        }
+        Command::Detect { image } => cmd_detect(&image),
         Command::Capture => {
             anyhow::bail!("`capture` is not implemented yet (Phase 3: camera)")
         }
         Command::Serve => {
-            anyhow::bail!("`serve` is not implemented yet (Phase 4: web UI)")
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(dartscore::web::run())
         }
     }
+}
+
+#[cfg(feature = "detection")]
+fn cmd_detect(image: &std::path::Path) -> Result<()> {
+    dartscore::detect::run(image)
+}
+
+#[cfg(not(feature = "detection"))]
+fn cmd_detect(_image: &std::path::Path) -> Result<()> {
+    anyhow::bail!("detection is disabled; rebuild with `--features detection`")
 }
 
 fn cmd_score(input: &PathBuf) -> Result<()> {
