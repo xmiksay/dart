@@ -174,3 +174,32 @@ async fn finished_game_links_saved_player() {
         .expect("bob persisted");
     assert!(bob_row.player_id.is_none());
 }
+
+#[tokio::test]
+#[ignore = "requires a live PostgreSQL (DATABASE_URL)"]
+async fn live_session_upsert_and_load() {
+    let conn = db::connect(&database_url()).await.expect("connect");
+    db::run_migrations(&conn).await.expect("migrate");
+
+    // First save inserts the singleton row.
+    let first = serde_json::json!({ "roster": { "players": [], "next_id": 0 }, "game": null });
+    repository::save_live_session(&conn, first.clone())
+        .await
+        .expect("first save");
+    let loaded = repository::load_live_session(&conn)
+        .await
+        .expect("load")
+        .expect("row present");
+    assert_eq!(loaded, first);
+
+    // A second save upserts the same row rather than inserting a duplicate.
+    let second = serde_json::json!({ "roster": { "players": [], "next_id": 0 }, "game": "x01" });
+    repository::save_live_session(&conn, second.clone())
+        .await
+        .expect("second save");
+    let loaded = repository::load_live_session(&conn)
+        .await
+        .expect("load")
+        .expect("row present");
+    assert_eq!(loaded, second);
+}

@@ -7,7 +7,8 @@ ARM_TARGET ?= aarch64-unknown-linux-gnu
 ARM_CPU    ?= cortex-a53
 
 .PHONY: all build release run lint fmt fmt-check test unit integration \
-        web web-install serve db-up db-down detect cross clean
+        web web-install serve db-up db-down detect detect-bg capture cameras calibrate \
+        score-tip snapshot build-capture cross clean
 
 all: lint test
 
@@ -23,8 +24,9 @@ run:
 	cargo run -- $(ARGS)
 
 # Run the web + WebSocket server (needs DATABASE_URL; see `make db-up`).
+# Built with `capture` so the browser calibration screen can grab camera frames.
 serve:
-	cargo run -- serve
+	cargo run --features capture -- serve
 
 # --- Frontend (Vue SPA, embedded into the release binary) ---
 web-install:
@@ -44,6 +46,53 @@ db-down:
 # --- Detection (Phase 1: candle YOLOv8, gated feature) ---
 detect:
 	cargo build --features detection
+
+# --- Camera capture (Phase 3, gated; implies detection, needs v4l) ---
+# Select a camera with `make capture CAMERA=2` (see `make cameras` for indices).
+# With no models/dartscore.safetensors present it runs in capture-only mode:
+# saves each settled frame to captures/ (no scoring).
+CAMERA ?= 0
+capture:
+	cargo run --features capture -- capture --camera $(CAMERA) \
+		$(if $(INTERVAL),--interval $(INTERVAL)) \
+		$(if $(MOTION_ON),--motion-on $(MOTION_ON)) \
+		$(if $(MOTION_OFF),--motion-off $(MOTION_OFF)) \
+		$(if $(SETTLE),--settle-frames $(SETTLE)) \
+		$(if $(BG_THRESHOLD),--bg-threshold $(BG_THRESHOLD)) \
+		$(if $(BG_MIN_AREA),--bg-min-area $(BG_MIN_AREA)) \
+		$(if $(EXPOSURE),--exposure $(EXPOSURE))
+
+# Tune background-subtraction detection on two saved frames (no camera needed):
+#   make detect-bg REFERENCE=captures/empty.png FRAME=captures/throw_0001.png \
+#       [THRESHOLD=35] [MIN_AREA=120]
+detect-bg:
+	cargo run -- detect-bg --reference "$(REFERENCE)" --frame "$(FRAME)" \
+		$(if $(THRESHOLD),--threshold $(THRESHOLD)) \
+		$(if $(MIN_AREA),--min-area $(MIN_AREA))
+
+# List available cameras and their indices.
+cameras:
+	cargo run --features capture -- capture --list
+
+# One-time manual calibration (fixed camera). Read the 4 board-point pixels off
+# a `make snapshot` frame (5&20 top, 13&6 right, 17&3 bottom, 8&11 left):
+#   make calibrate POINTS="x1,y1 x2,y2 x3,y3 x4,y4"
+calibrate:
+	cargo run -- calibrate --points "$(POINTS)"
+
+# Validate a calibration: score dart-tip pixels against calibration.json:
+#   make score-tip POINTS="640,360 949,360"
+score-tip:
+	cargo run -- score-tip --points "$(POINTS)"
+
+# Grab one frame from camera CAMERA and save it (quick camera check):
+#   make snapshot CAMERA=2
+snapshot:
+	cargo run --features capture -- capture --camera $(CAMERA) --snapshot
+
+# Build the capture binary without running it.
+build-capture:
+	cargo build --features capture
 
 lint:
 	cargo clippy --all-targets -- -D warnings
@@ -68,7 +117,7 @@ integration:
 # Cross-compile for the Pi (builds the SPA first for embedding).
 # Requires `cross` (cargo install cross).
 cross: web
-	RUSTFLAGS="-C target-cpu=$(ARM_CPU)" cross build --release --features detection --target $(ARM_TARGET)
+	RUSTFLAGS="-C target-cpu=$(ARM_CPU)" cross build --release --features capture --target $(ARM_TARGET)
 
 clean:
 	cargo clean

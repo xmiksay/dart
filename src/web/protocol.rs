@@ -2,7 +2,7 @@
 //! `docs/protocol.md`; this module must mirror them exactly.
 
 use crate::game::x01::X01Config;
-use crate::game::{Player, PlayerId};
+use crate::game::{Player, PlayerId, TurnRecord};
 use crate::geometry::Score;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -51,7 +51,8 @@ pub enum Command {
     },
     UndoLast,
     EditDart {
-        index: usize,
+        turn_index: usize,
+        dart_index: usize,
         dart: Score,
     },
     EndTurn,
@@ -73,6 +74,9 @@ pub struct GameState {
     pub players: Vec<Player>,
     pub current_player_id: Option<PlayerId>,
     pub current_turn: Vec<Score>,
+    /// Full leg history, oldest first; the last entry is the in-progress turn.
+    /// Reuses the engine's [`TurnRecord`], which serializes as `{ player, darts }`.
+    pub turns: Vec<TurnRecord>,
     pub winner_id: Option<PlayerId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x01: Option<X01State>,

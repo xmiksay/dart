@@ -19,6 +19,15 @@ pub struct Player {
     pub name: String,
 }
 
+/// One completed-or-in-progress turn: which player threw, and the darts. The
+/// engines expose the full ordered list so the UI can show — and the operator
+/// can correct — previous turns, not just the live one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TurnRecord {
+    pub player: PlayerId,
+    pub darts: Vec<crate::geometry::Score>,
+}
+
 /// Ordered set of players. Turn order follows roster order.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Roster {

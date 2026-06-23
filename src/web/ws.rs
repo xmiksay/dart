@@ -1,6 +1,7 @@
 //! WebSocket endpoint: per-client send loop, command intake, and the shared
 //! command handler that mutates the session, persists wins, and broadcasts.
 
+use anyhow::Context;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
@@ -47,7 +48,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         match msg {
             Message::Text(text) => {
                 let reply = match serde_json::from_str::<Command>(text.as_str()) {
-                    Ok(cmd) => match handle_command(&state, cmd).await {
+                    Ok(cmd) => match apply_command(&state, cmd).await {
                         Ok(()) => None,
                         Err(e) => Some(error_event(&e.to_string())),
                     },
@@ -67,20 +68,29 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let _ = writer.await;
 }
 
-/// Apply a command, persist a freshly won game, and broadcast the new state.
-async fn handle_command(state: &AppState, cmd: Command) -> anyhow::Result<()> {
-    let (state_json, finished) = {
+/// Apply a command, persist the live snapshot + a freshly won game, and
+/// broadcast the new state. Shared by the WS handler and the capture feed so
+/// camera darts run the exact same game/persist/broadcast path as WS commands.
+pub(super) async fn apply_command(state: &AppState, cmd: Command) -> anyhow::Result<()> {
+    let (state_json, finished, live) = {
         let mut session = state.session.lock().await;
         session.apply(cmd)?;
         let finished = session.take_finished_if_new();
+        let live = serde_json::to_value(session.snapshot())
+            .context("serializing live session snapshot")?;
         let json = serde_json::to_string(&ServerEvent::State {
             state: session.state(),
         })?;
-        (json, finished)
+        (json, finished, live)
     };
 
+    // Persist the live session on every change so a restart resumes the game.
+    // A save failure must never break live play; log and continue.
+    if let Err(e) = crate::db::repository::save_live_session(&state.db, live).await {
+        tracing::error!(error = ?e, "failed to persist live session");
+    }
+
     if let Some(snapshot) = finished {
-        // A persistence failure must not break live play; log and continue.
         if let Err(e) = crate::db::repository::save_finished_game(&state.db, snapshot).await {
             tracing::error!(error = ?e, "failed to persist finished game");
         }

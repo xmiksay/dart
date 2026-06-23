@@ -1,6 +1,6 @@
 //! Cricket game engine: numbers 15–20 plus bull, with optional cut-throat.
 
-use super::{PlayerId, Roster, DARTS_PER_TURN};
+use super::{PlayerId, Roster, TurnRecord, DARTS_PER_TURN};
 use crate::geometry::{Ring, Score};
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -43,9 +43,9 @@ pub struct CricketGame {
     order: Vec<PlayerId>,
     state: HashMap<PlayerId, PlayerState>,
     turn_idx: usize,
+    /// Finalized turns in throw order; turn `i` belongs to `order[i % n]`.
+    committed: Vec<Vec<Score>>,
     current_turn: Vec<Score>,
-    /// Full-state snapshot at the start of the current turn, for undo.
-    turn_snapshot: HashMap<PlayerId, PlayerState>,
     winner: Option<PlayerId>,
 }
 
@@ -54,20 +54,23 @@ impl CricketGame {
         if roster.is_empty() {
             bail!("cannot start a cricket game with no players");
         }
-        let order = roster.ids();
-        let state: HashMap<_, _> = order
+        Ok(Self::with_order(roster.ids(), cut_throat))
+    }
+
+    fn with_order(order: Vec<PlayerId>, cut_throat: bool) -> Self {
+        let state = order
             .iter()
             .map(|&id| (id, PlayerState::default()))
             .collect();
-        Ok(Self {
+        Self {
             cut_throat,
             order,
-            state: state.clone(),
+            state,
             turn_idx: 0,
+            committed: Vec::new(),
             current_turn: Vec::new(),
-            turn_snapshot: state,
             winner: None,
-        })
+        }
     }
 
     pub fn current_player(&self) -> PlayerId {
@@ -154,22 +157,77 @@ impl CricketGame {
         Ok(out)
     }
 
-    /// Remove the last dart of the in-progress turn, restoring state from the
-    /// turn snapshot and replaying the remaining darts. Manual-correction primitive.
+    /// All turns (finalized + the in-progress/winning one), oldest first.
+    pub fn turns(&self) -> Vec<TurnRecord> {
+        let n = self.order.len();
+        let mut out: Vec<TurnRecord> = self
+            .committed
+            .iter()
+            .enumerate()
+            .map(|(i, darts)| TurnRecord {
+                player: self.order[i % n],
+                darts: darts.clone(),
+            })
+            .collect();
+        if !self.current_turn.is_empty() {
+            out.push(TurnRecord {
+                player: self.current_player(),
+                darts: self.current_turn.clone(),
+            });
+        }
+        out
+    }
+
+    /// The whole game's darts in throw order (finalized turns then the live turn).
+    fn flat(&self) -> Vec<Score> {
+        self.committed
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.current_turn.iter().copied())
+            .collect()
+    }
+
+    /// Rebuild all derived state by replaying a dart log from the start — how
+    /// edits and undo stay correct (cut-throat scoring depends on global state,
+    /// so a from-scratch replay is the reliable way to recompute).
+    fn rebuild(&mut self, flat: Vec<Score>) {
+        let mut g = Self::with_order(self.order.clone(), self.cut_throat);
+        for d in flat {
+            if g.winner.is_some() {
+                break;
+            }
+            let _ = g.throw(d);
+        }
+        *self = g;
+    }
+
+    /// Remove the most recent dart anywhere in the game, reopening the previous
+    /// turn if the current one has been committed. Works after a win.
     pub fn undo_last_dart(&mut self) -> Result<Option<Score>> {
-        if self.current_turn.is_empty() {
-            return Ok(None);
-        }
-        if self.winner.is_some() {
-            bail!("cannot undo after the game is won");
-        }
-        let removed = self.current_turn.pop();
-        let darts = std::mem::take(&mut self.current_turn);
-        self.state = self.turn_snapshot.clone();
-        for d in &darts {
-            let _ = self.throw(*d);
+        let mut flat = self.flat();
+        let removed = flat.pop();
+        if removed.is_some() {
+            self.rebuild(flat);
         }
         Ok(removed)
+    }
+
+    /// Correct a single dart in any turn (0-based turn then dart index) and
+    /// recompute by replay — fixes a misread after the turn has closed.
+    pub fn edit_dart(&mut self, turn_index: usize, dart_index: usize, dart: Score) -> Result<()> {
+        let turns = self.turns();
+        let turn = turns
+            .get(turn_index)
+            .ok_or_else(|| anyhow::anyhow!("no turn at index {turn_index}"))?;
+        if dart_index >= turn.darts.len() {
+            bail!("turn {turn_index} has no dart at index {dart_index}");
+        }
+        let before: usize = turns[..turn_index].iter().map(|t| t.darts.len()).sum();
+        let mut flat = self.flat();
+        flat[before + dart_index] = dart;
+        self.rebuild(flat);
+        Ok(())
     }
 
     /// A number scores only while at least one opponent has not closed it.
@@ -198,9 +256,9 @@ impl CricketGame {
 
     fn maybe_end_turn(&mut self) {
         if self.current_turn.len() >= DARTS_PER_TURN {
-            self.current_turn.clear();
+            // Preserve the finished turn so it can be shown and edited later.
+            self.committed.push(std::mem::take(&mut self.current_turn));
             self.turn_idx = (self.turn_idx + 1) % self.order.len();
-            self.turn_snapshot = self.state.clone();
         }
     }
 }

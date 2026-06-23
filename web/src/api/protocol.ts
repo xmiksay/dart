@@ -60,12 +60,23 @@ export interface CricketState {
   points: Record<string, number>
 }
 
+/** One completed-or-in-progress turn in the leg history. */
+export interface Turn {
+  player: PlayerId
+  darts: Dart[]
+}
+
 /** Full game snapshot broadcast after every accepted command. */
 export interface GameState {
   mode: GameMode
   players: Player[]
   current_player_id: PlayerId | null
   current_turn: Dart[]
+  /**
+   * Full leg history, oldest first. The last entry is the in-progress turn
+   * (mirrors `current_turn` for the current player).
+   */
+  turns: Turn[]
   winner_id: PlayerId | null
   x01?: X01State
   cricket?: CricketState
@@ -85,7 +96,7 @@ export type ClientCommand =
   | ({ type: 'game_new' } & NewGamePayload)
   | { type: 'throw'; dart: Dart }
   | { type: 'undo_last' }
-  | { type: 'edit_dart'; index: number; dart: Dart }
+  | { type: 'edit_dart'; turn_index: number; dart_index: number; dart: Dart }
   | { type: 'end_turn' }
   | { type: 'reset' }
 
@@ -130,4 +141,30 @@ export interface SavedPlayer {
   id: string
   name: string
   created_at: string
+}
+
+// --- REST (camera calibration) ---------------------------------------------
+
+/** An [x, y] pair in original-image pixels (origin top-left). */
+export type PixelPoint = [number, number]
+
+/** The four canonical-order board points in image pixels. */
+export type CalibrationPoints = [PixelPoint, PixelPoint, PixelPoint, PixelPoint]
+
+/** A capture device exposed by the backend (501 if not built with capture). */
+export interface CameraInfo {
+  index: number
+  name: string
+}
+
+/** Saved calibration, or null if none exists yet. */
+export interface Calibration {
+  points: CalibrationPoints
+}
+
+/** Result of POST /api/calibration: board-mm centre as a sanity check. */
+export interface CalibrationResult {
+  ok: true
+  /** Where the quad centre maps in board mm; should be near [0,0] (bull). */
+  centre: PixelPoint
 }

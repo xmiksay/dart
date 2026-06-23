@@ -5,6 +5,9 @@
 //! Everything downstream of that — homography, board mapping, score
 //! classification, game logic, persistence, web UI — is plain deterministic Rust.
 
+pub mod bgsub;
+pub mod calibration;
+pub mod capture;
 pub mod db;
 pub mod game;
 pub mod geometry;

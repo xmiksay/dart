@@ -3,4 +3,5 @@
 pub mod dart;
 pub mod game;
 pub mod game_player;
+pub mod live_session;
 pub mod player;

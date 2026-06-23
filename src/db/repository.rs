@@ -4,14 +4,18 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
+    sea_query::OnConflict, ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection,
+    DbErr, EntityTrait, QueryFilter, QueryOrder, Set, SqlErr, TransactionTrait,
 };
 use serde::Serialize;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use super::entities::{dart, game, game_player, player};
+use super::entities::{dart, game, game_player, live_session, player};
+
+/// The single live-session row's primary key (`id = 0`, enforced by a check
+/// constraint so the table holds at most one snapshot).
+const LIVE_SESSION_ID: i16 = 0;
 
 /// A finished game ready to persist (built by the web session on a win).
 pub struct NewGame {
@@ -123,6 +127,37 @@ pub async fn save_finished_game(db: &DatabaseConnection, g: NewGame) -> Result<U
 
     txn.commit().await.context("committing game")?;
     Ok(game_id)
+}
+
+/// Upsert the singleton live-session snapshot (replace the one `id = 0` row).
+pub async fn save_live_session(db: &DatabaseConnection, snapshot: serde_json::Value) -> Result<()> {
+    let model = live_session::ActiveModel {
+        id: Set(LIVE_SESSION_ID),
+        snapshot: Set(snapshot),
+        updated_at: Set(Utc::now().into()),
+    };
+    live_session::Entity::insert(model)
+        .on_conflict(
+            OnConflict::column(live_session::Column::Id)
+                .update_columns([
+                    live_session::Column::Snapshot,
+                    live_session::Column::UpdatedAt,
+                ])
+                .to_owned(),
+        )
+        .exec(db)
+        .await
+        .context("saving live session")?;
+    Ok(())
+}
+
+/// Load the singleton live-session snapshot, if one was persisted.
+pub async fn load_live_session(db: &DatabaseConnection) -> Result<Option<serde_json::Value>> {
+    let row = live_session::Entity::find_by_id(LIVE_SESSION_ID)
+        .one(db)
+        .await
+        .context("loading live session")?;
+    Ok(row.map(|m| m.snapshot))
 }
 
 /// List finished games (most recent first) with player names and the winner.

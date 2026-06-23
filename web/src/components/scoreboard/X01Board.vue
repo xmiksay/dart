@@ -2,13 +2,13 @@
 import { computed } from 'vue'
 import { useGameStore } from '@/stores/game'
 import { dartLabel } from '@/utils/dart'
-import DartSlots from './DartSlots.vue'
+import RoundGrid from './RoundGrid.vue'
 
 const game = useGameStore()
 
 const x01 = computed(() => game.state.x01)
 const checkoutLabel = computed(() =>
-  x01.value?.checkout?.map(dartLabel).join('  ') ?? null,
+  x01.value?.checkout?.map(dartLabel).join(' ') ?? null,
 )
 
 function remaining(id: number): number {
@@ -17,56 +17,30 @@ function remaining(id: number): number {
 </script>
 
 <template>
-  <div
-    class="grid gap-5 p-6"
-    :class="game.players.length > 2 ? 'lg:grid-cols-2' : 'grid-cols-1'"
-  >
-    <div
-      v-for="p in game.players"
-      :key="p.id"
-      class="relative overflow-hidden rounded-3xl border-2 p-6 transition-all duration-300"
-      :class="
-        p.id === game.currentPlayerId
-          ? 'border-accent-turn bg-board-panel shadow-[0_0_40px_-8px] shadow-accent-turn'
-          : 'border-board-line bg-board-panel/60'
-      "
-    >
-      <div class="flex items-center justify-between">
-        <h3
-          class="text-4xl font-black"
-          :class="p.id === game.currentPlayerId ? 'text-accent-turn' : 'text-slate-200'"
-        >
-          {{ p.name }}
-        </h3>
-        <span
-          v-if="p.id === game.currentPlayerId"
-          class="rounded-full bg-accent-turn px-4 py-1 text-lg font-bold uppercase text-board-bg"
-        >
-          To throw
-        </span>
-      </div>
-
-      <div class="my-2 text-right">
-        <span class="font-score text-mega leading-none tracking-tighter">
-          {{ remaining(p.id) }}
-        </span>
-      </div>
-
-      <div
-        v-if="p.id === game.currentPlayerId"
-        class="mt-4 flex flex-col gap-4 border-t border-board-line pt-4"
-      >
-        <DartSlots :darts="game.currentTurn" :tick="game.dartTick" />
-        <div
-          v-if="checkoutLabel"
-          class="rounded-xl bg-accent/10 px-4 py-3 text-2xl"
-        >
-          <span class="font-semibold uppercase text-accent">Checkout</span>
-          <span class="ml-3 font-black tracking-wide text-accent">
-            {{ checkoutLabel }}
-          </span>
+  <div class="flex h-full flex-col p-4">
+    <RoundGrid>
+      <template #header="{ player, active }">
+        <div class="px-2 py-2 text-center">
+          <p
+            class="truncate text-2xl font-black leading-tight"
+            :class="active ? 'text-accent-turn' : 'text-slate-200'"
+          >
+            {{ player.name }}
+          </p>
+          <p
+            class="font-score text-6xl font-black leading-none tracking-tighter"
+            :class="active ? 'text-accent-turn' : 'text-slate-100'"
+          >
+            {{ remaining(player.id) }}
+          </p>
+          <p
+            v-if="active && checkoutLabel"
+            class="mt-1 truncate text-base font-bold tracking-wide text-accent"
+          >
+            ✓ {{ checkoutLabel }}
+          </p>
         </div>
-      </div>
-    </div>
+      </template>
+    </RoundGrid>
   </div>
 </template>

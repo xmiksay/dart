@@ -1,6 +1,6 @@
-//! In-memory game session: a persistent roster plus an optional active game,
-//! the authoritative turn/dart history (the engines keep only the live turn),
-//! and the command handler that mutates both and builds wire state.
+//! In-memory game session: a persistent roster plus an optional active game and
+//! the command handler that mutates it and builds wire state. The engines own
+//! the authoritative whole-leg history; the session keeps no duplicate of it.
 
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use crate::db::repository::{NewDart, NewGame, NewPlayer};
 use crate::game::cricket::{CricketGame, NUMBERS};
 use crate::game::x01::{X01Config, X01Game};
-use crate::game::{Player, PlayerId, Roster};
+use crate::game::{Player, PlayerId, Roster, TurnRecord, DARTS_PER_TURN};
 use crate::geometry::Score;
 
 use super::protocol::{Command, CricketState, GameMode, GameState, X01State};
@@ -21,20 +21,6 @@ pub enum ActiveGame {
 }
 
 impl ActiveGame {
-    fn current_player(&self) -> PlayerId {
-        match self {
-            ActiveGame::X01(g) => g.current_player(),
-            ActiveGame::Cricket(g) => g.current_player(),
-        }
-    }
-
-    fn current_turn(&self) -> &[Score] {
-        match self {
-            ActiveGame::X01(g) => g.current_turn(),
-            ActiveGame::Cricket(g) => g.current_turn(),
-        }
-    }
-
     fn winner(&self) -> Option<PlayerId> {
         match self {
             ActiveGame::X01(g) => g.winner(),
@@ -55,36 +41,68 @@ impl ActiveGame {
             ActiveGame::Cricket(g) => g.undo_last_dart(),
         }
     }
-}
 
-/// A finalized turn: all darts belong to one player.
-struct TurnRec {
-    player_id: PlayerId,
-    darts: Vec<Score>,
+    fn edit_dart(&mut self, turn_index: usize, dart_index: usize, dart: Score) -> Result<()> {
+        match self {
+            ActiveGame::X01(g) => g.edit_dart(turn_index, dart_index, dart),
+            ActiveGame::Cricket(g) => g.edit_dart(turn_index, dart_index, dart),
+        }
+    }
+
+    /// The full leg, oldest first; the last entry is the in-progress turn.
+    pub(super) fn turns(&self) -> Vec<TurnRecord> {
+        match self {
+            ActiveGame::X01(g) => g.turns(),
+            ActiveGame::Cricket(g) => g.turns(),
+        }
+    }
+
+    /// Darts thrown so far in the in-progress turn.
+    fn live_turn_len(&self) -> usize {
+        match self {
+            ActiveGame::X01(g) => g.current_turn().len(),
+            ActiveGame::Cricket(g) => g.current_turn().len(),
+        }
+    }
 }
 
 /// Snapshot of the config/order captured when a game starts (the engines do not
 /// expose their config or remember roster order independently of play).
-struct GameMeta {
-    mode: GameMode,
-    x01: Option<X01Config>,
-    cut_throat: Option<bool>,
-    started_at: DateTime<Utc>,
+pub(super) struct GameMeta {
+    pub(super) mode: GameMode,
+    pub(super) x01: Option<X01Config>,
+    pub(super) cut_throat: Option<bool>,
+    pub(super) started_at: DateTime<Utc>,
     order: Vec<PlayerId>,
     names: Vec<String>,
 }
 
+impl GameMeta {
+    /// Build meta from a roster, capturing turn order and names at game start
+    /// (or at restore time, derived from the restored roster).
+    pub(super) fn new(
+        mode: GameMode,
+        x01: Option<X01Config>,
+        cut_throat: Option<bool>,
+        started_at: DateTime<Utc>,
+        roster: &Roster,
+    ) -> Self {
+        Self {
+            mode,
+            x01,
+            cut_throat,
+            started_at,
+            order: roster.ids(),
+            names: roster.players().iter().map(|p| p.name.clone()).collect(),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct GameSession {
-    roster: Roster,
-    game: Option<ActiveGame>,
-    meta: Option<GameMeta>,
-    /// Completed turns of the current game.
-    committed: Vec<TurnRec>,
-    /// Darts of the in-progress turn (mirrors the engine's live turn).
-    hist_cur: Vec<Score>,
-    /// Player of the in-progress turn.
-    hist_cur_player: Option<PlayerId>,
+    pub(super) roster: Roster,
+    pub(super) game: Option<ActiveGame>,
+    pub(super) meta: Option<GameMeta>,
     /// Set once the finished game has been handed off for persistence.
     persisted: bool,
 }
@@ -119,7 +137,11 @@ impl GameSession {
             Command::UndoLast => {
                 self.undo_last()?;
             }
-            Command::EditDart { index, dart } => self.edit_dart(index, dart)?,
+            Command::EditDart {
+                turn_index,
+                dart_index,
+                dart,
+            } => self.edit_dart(turn_index, dart_index, dart)?,
             Command::EndTurn => self.end_turn()?,
             Command::Reset => self.reset(),
         }
@@ -151,111 +173,67 @@ impl GameSession {
                 (ActiveGame::Cricket(g), None, Some(cut))
             }
         };
-        self.meta = Some(GameMeta {
+        self.meta = Some(GameMeta::new(
             mode,
-            x01: meta_x01,
+            meta_x01,
             cut_throat,
-            started_at: Utc::now(),
-            order: self.roster.ids(),
-            names: self
-                .roster
-                .players()
-                .iter()
-                .map(|p| p.name.clone())
-                .collect(),
-        });
+            Utc::now(),
+            &self.roster,
+        ));
         self.game = Some(game);
-        self.committed.clear();
-        self.hist_cur.clear();
-        self.hist_cur_player = None;
         self.persisted = false;
         Ok(())
     }
 
-    /// Apply one dart through the engine and record it in the history,
-    /// finalizing the turn when the engine advances or the game is won.
+    /// An idle session that remembers a restored roster but has no active game.
+    pub(super) fn idle_with_roster(roster: Roster) -> Self {
+        Self {
+            roster,
+            ..Self::default()
+        }
+    }
+
+    /// A session restored mid-game: roster, replayed engine, and rebuilt meta.
+    pub(super) fn restored(roster: Roster, game: ActiveGame, meta: GameMeta) -> Self {
+        Self {
+            roster,
+            game: Some(game),
+            meta: Some(meta),
+            persisted: false,
+        }
+    }
+
+    /// Apply one dart through the engine, which records it in the leg history.
     fn record_throw(&mut self, dart: Score) -> Result<()> {
-        let Self {
-            game,
-            committed,
-            hist_cur,
-            hist_cur_player,
-            ..
-        } = self;
-        let game = game
+        self.game
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("no active game"))?;
-
-        if hist_cur.is_empty() {
-            *hist_cur_player = Some(game.current_player());
-        }
-        let player = hist_cur_player.expect("turn player set on the first dart of a turn");
-
-        game.throw(dart)?;
-        hist_cur.push(dart);
-
-        // The engine clears its live turn on advance; a win keeps the darts but
-        // ends the game. Either way the turn is now finalized.
-        let won = game.winner().is_some();
-        let advanced = game.current_turn().is_empty();
-        if won || advanced {
-            committed.push(TurnRec {
-                player_id: player,
-                darts: std::mem::take(hist_cur),
-            });
-            *hist_cur_player = None;
-        }
-        Ok(())
+            .ok_or_else(|| anyhow::anyhow!("no active game"))?
+            .throw(dart)
     }
 
+    /// Remove the most recent dart anywhere in the leg (the engine reopens the
+    /// previous turn if the current one already closed; works after a win).
     fn undo_last(&mut self) -> Result<Option<Score>> {
-        let Self {
-            game,
-            hist_cur,
-            hist_cur_player,
-            ..
-        } = self;
-        let game = game
+        self.game
             .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("no active game"))?;
-        let removed = game.undo_last()?;
-        if removed.is_some() {
-            hist_cur.pop();
-            if hist_cur.is_empty() {
-                *hist_cur_player = None;
-            }
-        }
-        Ok(removed)
+            .ok_or_else(|| anyhow::anyhow!("no active game"))?
+            .undo_last()
     }
 
-    /// Correct dart `index` of the in-progress turn: roll the turn back to that
-    /// dart, replay the correction, then replay the darts that followed it.
-    fn edit_dart(&mut self, index: usize, dart: Score) -> Result<()> {
-        let turn = {
-            let game = self
-                .game
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("no active game"))?;
-            game.current_turn().to_vec()
-        };
-        if index >= turn.len() {
-            bail!("dart index {index} out of range for the current turn");
-        }
-        let tail: Vec<Score> = turn[index + 1..].to_vec();
-        for _ in index..turn.len() {
-            self.undo_last()?;
-        }
-        self.record_throw(dart)?;
-        for d in tail {
-            self.record_throw(d)?;
-        }
-        Ok(())
+    /// Correct any dart in any turn; the engine replays the leg to recompute all
+    /// state. `turn_index` indexes the engine's `turns()` (last = in-progress).
+    fn edit_dart(&mut self, turn_index: usize, dart_index: usize, dart: Score) -> Result<()> {
+        self.game
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("no active game"))?
+            .edit_dart(turn_index, dart_index, dart)
     }
 
-    /// Force-advance to the next player by filling the turn with misses (a miss
-    /// scores nothing and never busts, so this is a clean "skip the rest").
+    /// Force-advance to the next player by filling the current turn with misses
+    /// (a miss scores nothing and never busts, so this cleanly "skips the rest").
+    /// The engine auto-advances once the turn reaches [`DARTS_PER_TURN`] darts.
     fn end_turn(&mut self) -> Result<()> {
-        {
+        let live_len = {
             let game = self
                 .game
                 .as_ref()
@@ -263,9 +241,10 @@ impl GameSession {
             if game.winner().is_some() {
                 bail!("game already won");
             }
-        }
-        let target = self.committed.len() + 1;
-        while self.committed.len() < target {
+            game.live_turn_len()
+        };
+        for _ in live_len..DARTS_PER_TURN {
+            // A win mid-fill ends the leg; stop rather than start a new turn.
             if self.game.as_ref().and_then(|g| g.winner()).is_some() {
                 break;
             }
@@ -277,10 +256,12 @@ impl GameSession {
     fn reset(&mut self) {
         self.game = None;
         self.meta = None;
-        self.committed.clear();
-        self.hist_cur.clear();
-        self.hist_cur_player = None;
         self.persisted = false;
+    }
+
+    /// Whether a game is currently active (used for restore logging).
+    pub fn has_active_game(&self) -> bool {
+        self.game.is_some()
     }
 
     /// Build the wire `GameState` from the current session.
@@ -292,6 +273,7 @@ impl GameSession {
                 players,
                 current_player_id: None,
                 current_turn: Vec::new(),
+                turns: Vec::new(),
                 winner_id: None,
                 x01: None,
                 cricket: None,
@@ -311,6 +293,7 @@ impl GameSession {
                     players,
                     current_player_id: Some(cur),
                     current_turn: g.current_turn().to_vec(),
+                    turns: g.turns(),
                     winner_id: g.winner(),
                     x01: Some(X01State {
                         config,
@@ -347,6 +330,7 @@ impl GameSession {
                     players,
                     current_player_id: Some(g.current_player()),
                     current_turn: g.current_turn().to_vec(),
+                    turns: g.turns(),
                     winner_id: g.winner(),
                     x01: None,
                     cricket: Some(CricketState {
@@ -386,9 +370,10 @@ impl GameSession {
             })
             .collect();
 
+        // The engine is the single source of truth for the leg history.
         let mut darts = Vec::new();
-        for (turn_no, turn) in self.committed.iter().enumerate() {
-            let ppos = meta.order.iter().position(|&id| id == turn.player_id)? as i32;
+        for (turn_no, turn) in game.turns().iter().enumerate() {
+            let ppos = meta.order.iter().position(|&id| id == turn.player)? as i32;
             for (dart_no, s) in turn.darts.iter().enumerate() {
                 darts.push(NewDart {
                     player_position: ppos,
@@ -459,6 +444,7 @@ mod tests {
                 "players": [],
                 "current_player_id": null,
                 "current_turn": [],
+                "turns": [],
                 "winner_id": null
             })
         );
@@ -520,6 +506,11 @@ mod tests {
             v["current_turn"],
             json!([{ "ring": "Treble", "segment": 20, "value": 60 }])
         );
+        // The in-progress turn is mirrored in the full leg history.
+        assert_eq!(
+            v["turns"],
+            json!([{ "player": 0, "darts": [{ "ring": "Treble", "segment": 20, "value": 60 }] }])
+        );
         // Checkout suggestion is present for the current player (a Vec or null).
         assert!(v["x01"].get("checkout").is_some());
     }
@@ -566,9 +557,11 @@ mod tests {
             dart: Score::single(7),
         })
         .unwrap();
-        // Correct the first dart (5 -> T20). Remaining = 501 - 60 - 7 = 434.
+        // Correct the first dart of the in-progress turn (5 -> T20).
+        // Remaining = 501 - 60 - 7 = 434. The in-progress turn is turn 0.
         s.apply(Command::EditDart {
-            index: 0,
+            turn_index: 0,
+            dart_index: 0,
             dart: Score::treble(20),
         })
         .unwrap();
@@ -576,6 +569,60 @@ mod tests {
         assert_eq!(v["x01"]["remaining"]["0"], 434);
         assert_eq!(v["current_turn"][0]["value"], 60);
         assert_eq!(v["current_turn"][1]["value"], 7);
+    }
+
+    #[test]
+    fn edit_previous_turn_recomputes_state() {
+        let mut s = GameSession::new();
+        add_two(&mut s);
+        s.apply(Command::GameNew {
+            mode: GameMode::X01,
+            x01: None,
+            cricket: None,
+        })
+        .unwrap();
+        // Ann's full turn (3 darts) closes, advancing to Bob.
+        s.apply(Command::Throw {
+            dart: Score::single(5),
+        })
+        .unwrap();
+        s.apply(Command::Throw {
+            dart: Score::single(5),
+        })
+        .unwrap();
+        s.apply(Command::Throw {
+            dart: Score::single(5),
+        })
+        .unwrap();
+        // Bob throws one dart in the now-current turn.
+        s.apply(Command::Throw {
+            dart: Score::single(1),
+        })
+        .unwrap();
+
+        let before = state_json(&s);
+        assert_eq!(before["current_player_id"], 1);
+        assert_eq!(before["x01"]["remaining"]["0"], 486); // 501 - 15
+        assert_eq!(before["turns"].as_array().unwrap().len(), 2);
+
+        // Correct Ann's first dart (committed turn 0): S5 -> T20 (+55).
+        s.apply(Command::EditDart {
+            turn_index: 0,
+            dart_index: 0,
+            dart: Score::treble(20),
+        })
+        .unwrap();
+
+        let v = state_json(&s);
+        // Ann recomputed: 501 - 60 - 5 - 5 = 431.
+        assert_eq!(v["x01"]["remaining"]["0"], 431);
+        // Bob's turn and remaining are untouched; still his turn.
+        assert_eq!(v["current_player_id"], 1);
+        assert_eq!(v["x01"]["remaining"]["1"], 500);
+        assert_eq!(v["turns"][0]["player"], 0);
+        assert_eq!(v["turns"][0]["darts"][0]["value"], 60);
+        assert_eq!(v["turns"][1]["player"], 1);
+        assert_eq!(v["current_turn"][0]["value"], 1);
     }
 
     #[test]

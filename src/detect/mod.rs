@@ -12,6 +12,7 @@ use crate::scoring::Detection;
 use anyhow::{anyhow, Context, Result};
 use candle_core::{DType, Device, IndexOp, Module, Tensor};
 use candle_nn::VarBuilder;
+use image::RgbImage;
 use model::{Multiples, YoloV8};
 use std::path::Path;
 
@@ -45,15 +46,12 @@ struct Letterbox {
     pad_y: f32,
 }
 
-fn letterbox(image: &Path, device: &Device) -> Result<Letterbox> {
-    let img = image::open(image)
-        .with_context(|| format!("opening image {}", image.display()))?
-        .to_rgb8();
+fn letterbox(img: &RgbImage, device: &Device) -> Result<Letterbox> {
     let (w0, h0) = img.dimensions();
     let scale = (IMG_SIZE as f32 / w0 as f32).min(IMG_SIZE as f32 / h0 as f32);
     let nw = (w0 as f32 * scale).round() as u32;
     let nh = (h0 as f32 * scale).round() as u32;
-    let resized = image::imageops::resize(&img, nw, nh, image::imageops::FilterType::Triangle);
+    let resized = image::imageops::resize(img, nw, nh, image::imageops::FilterType::Triangle);
     let pad_x = (IMG_SIZE as u32 - nw) / 2;
     let pad_y = (IMG_SIZE as u32 - nh) / 2;
 
@@ -146,55 +144,75 @@ fn decode(pred: &Tensor) -> Result<Vec<Detected>> {
     Ok(out)
 }
 
-/// Run detection on an image, returning calibration points + tips in original
-/// image pixels (origin top-left).
-pub fn detect_image(weights: &Path, image: &Path) -> Result<Detection> {
-    if !weights.exists() {
-        return Err(anyhow!(
-            "weights not found at {} — train + convert first (python/README.md)",
-            weights.display()
-        ));
+/// A loaded YOLOv8n detector. Build once and reuse across frames (the live
+/// capture loop must not rebuild the graph or re-mmap weights per frame).
+pub struct Detector {
+    model: YoloV8,
+    device: Device,
+}
+
+impl Detector {
+    /// Load the detector from a safetensors weights file.
+    pub fn load(weights: &Path) -> Result<Self> {
+        if !weights.exists() {
+            return Err(anyhow!(
+                "weights not found at {} — train + convert first (python/README.md)",
+                weights.display()
+            ));
+        }
+        let device = Device::Cpu;
+        // SAFETY: mmap of a trusted local artifact produced by our conversion step.
+        let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)? };
+        let model = YoloV8::load(vb, Multiples::n(), NUM_CLASSES)
+            .context("building YOLOv8n graph — check class count matches the weights")?;
+        Ok(Self { model, device })
     }
-    let device = Device::Cpu;
-    let lb = letterbox(image, &device)?;
 
-    // SAFETY: mmap of a trusted local artifact produced by our conversion step.
-    let vb = unsafe { VarBuilder::from_mmaped_safetensors(&[weights], DType::F32, &device)? };
-    let model = YoloV8::load(vb, Multiples::n(), NUM_CLASSES)
-        .context("building YOLOv8n graph — check class count matches the weights")?;
+    /// Detect on an in-memory RGB frame, returning calibration points + tips in
+    /// original-image pixels (origin top-left).
+    pub fn detect(&self, img: &RgbImage) -> Result<Detection> {
+        let lb = letterbox(img, &self.device)?;
+        let pred = self.model.forward(&lb.tensor)?;
+        let dets = nms(decode(&pred)?);
 
-    let pred = model.forward(&lb.tensor)?;
-    let dets = nms(decode(&pred)?);
+        // Map a letterboxed centre back to the original image.
+        let to_orig = |cx: f32, cy: f32| {
+            Point::new(
+                ((cx - lb.pad_x) / lb.scale) as f64,
+                ((cy - lb.pad_y) / lb.scale) as f64,
+            )
+        };
 
-    // Map a letterboxed centre back to the original image.
-    let to_orig = |cx: f32, cy: f32| {
-        Point::new(
-            ((cx - lb.pad_x) / lb.scale) as f64,
-            ((cy - lb.pad_y) / lb.scale) as f64,
-        )
-    };
-
-    // One best detection per calibration class (0..=3), in canonical order.
-    let mut calibration = [None; 4];
-    let mut tips = Vec::new();
-    for d in &dets {
-        if d.class == CLASS_DART {
-            tips.push((d.conf, to_orig(d.cx, d.cy)));
-        } else if d.class < 4 {
-            let slot = &mut calibration[d.class];
-            if slot.is_none_or(|(c, _)| d.conf > c) {
-                *slot = Some((d.conf, to_orig(d.cx, d.cy)));
+        // One best detection per calibration class (0..=3), in canonical order.
+        let mut calibration = [None; 4];
+        let mut tips = Vec::new();
+        for d in &dets {
+            if d.class == CLASS_DART {
+                tips.push((d.conf, to_orig(d.cx, d.cy)));
+            } else if d.class < 4 {
+                let slot = &mut calibration[d.class];
+                if slot.is_none_or(|(c, _)| d.conf > c) {
+                    *slot = Some((d.conf, to_orig(d.cx, d.cy)));
+                }
             }
         }
+
+        let calibration = collect_calibration(calibration)?;
+        // Keep at most three highest-confidence tips (a turn is three darts).
+        tips.sort_by(|a, b| b.0.total_cmp(&a.0));
+        tips.truncate(3);
+        let tips = tips.into_iter().map(|(_, p)| p).collect();
+
+        Ok(Detection { calibration, tips })
     }
+}
 
-    let calibration = collect_calibration(calibration)?;
-    // Keep at most three highest-confidence tips (a turn is three darts).
-    tips.sort_by(|a, b| b.0.total_cmp(&a.0));
-    tips.truncate(3);
-    let tips = tips.into_iter().map(|(_, p)| p).collect();
-
-    Ok(Detection { calibration, tips })
+/// Run detection on an image file (loads the model fresh; for one-shot CLI use).
+pub fn detect_image(weights: &Path, image: &Path) -> Result<Detection> {
+    let img = image::open(image)
+        .with_context(|| format!("opening image {}", image.display()))?
+        .to_rgb8();
+    Detector::load(weights)?.detect(&img)
 }
 
 fn collect_calibration(slots: [Option<(f32, Point)>; 4]) -> Result<[Point; 4]> {

@@ -1,6 +1,6 @@
 //! X01 game engine (301 / 501 / 701 / 901) with configurable in/out rules.
 
-use super::{PlayerId, Roster, DARTS_PER_TURN};
+use super::{PlayerId, Roster, TurnRecord, DARTS_PER_TURN};
 use crate::geometry::Score;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
@@ -63,6 +63,8 @@ pub struct X01Game {
     order: Vec<PlayerId>,
     state: HashMap<PlayerId, PlayerState>,
     turn_idx: usize,
+    /// Finalized turns in throw order; turn `i` belongs to `order[i % n]`.
+    committed: Vec<Vec<Score>>,
     current_turn: Vec<Score>,
     turn_start: PlayerState,
     winner: Option<PlayerId>,
@@ -73,22 +75,26 @@ impl X01Game {
         if roster.is_empty() {
             bail!("cannot start an X01 game with no players");
         }
-        let order = roster.ids();
+        Ok(Self::with_order(config, roster.ids()))
+    }
+
+    fn with_order(config: X01Config, order: Vec<PlayerId>) -> Self {
         let opened = config.in_rule == InRule::Straight;
         let init = PlayerState {
             remaining: config.start,
             opened,
         };
         let state = order.iter().map(|&id| (id, init)).collect();
-        Ok(Self {
+        Self {
             config,
             order,
             state,
             turn_idx: 0,
+            committed: Vec::new(),
             current_turn: Vec::new(),
             turn_start: init,
             winner: None,
-        })
+        }
     }
 
     pub fn current_player(&self) -> PlayerId {
@@ -163,25 +169,79 @@ impl X01Game {
         }
     }
 
-    /// Remove the last dart of the in-progress turn and recompute state by
-    /// replaying the remaining darts. The primitive behind manual correction.
+    /// All turns (finalized + the in-progress/winning one), oldest first.
+    pub fn turns(&self) -> Vec<TurnRecord> {
+        let n = self.order.len();
+        let mut out: Vec<TurnRecord> = self
+            .committed
+            .iter()
+            .enumerate()
+            .map(|(i, darts)| TurnRecord {
+                player: self.order[i % n],
+                darts: darts.clone(),
+            })
+            .collect();
+        if !self.current_turn.is_empty() {
+            out.push(TurnRecord {
+                player: self.current_player(),
+                darts: self.current_turn.clone(),
+            });
+        }
+        out
+    }
+
+    /// The whole leg's darts in throw order (finalized turns then the live turn).
+    fn flat(&self) -> Vec<Score> {
+        self.committed
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.current_turn.iter().copied())
+            .collect()
+    }
+
+    /// Rebuild all derived state by replaying a dart log from the start. This is
+    /// how edits/undo stay correct: any change to history is a replay.
+    fn rebuild(&mut self, flat: Vec<Score>) {
+        let mut g = Self::with_order(self.config, self.order.clone());
+        for d in flat {
+            if g.winner.is_some() {
+                break; // darts after a (possibly newly-earlier) checkout can't be thrown
+            }
+            let _ = g.throw(d);
+        }
+        *self = g;
+    }
+
+    /// Remove the most recent dart anywhere in the leg — including reopening the
+    /// previous turn once the current one has been committed. Manual-correction
+    /// primitive; works after a win (reopens the leg).
     pub fn undo_last_dart(&mut self) -> Result<Option<Score>> {
-        if self.current_turn.is_empty() {
-            return Ok(None);
-        }
-        // Undo only affects an in-progress turn; a win is final.
-        if self.winner.is_some() {
-            bail!("cannot undo after the leg is won");
-        }
-        let removed = self.current_turn.pop();
-        let darts = std::mem::take(&mut self.current_turn);
-        let id = self.current_player();
-        self.state.insert(id, self.turn_start);
-        for d in &darts {
-            // Replay known-good darts; these never bust/win within a live turn.
-            let _ = self.throw(*d);
+        let mut flat = self.flat();
+        let removed = flat.pop();
+        if removed.is_some() {
+            self.rebuild(flat);
         }
         Ok(removed)
+    }
+
+    /// Correct a single dart in any turn (0-based turn then dart index) and
+    /// recompute the leg by replay. Lets the operator fix a misread after the
+    /// turn has closed.
+    pub fn edit_dart(&mut self, turn_index: usize, dart_index: usize, dart: Score) -> Result<()> {
+        let turns = self.turns();
+        let turn = turns
+            .get(turn_index)
+            .ok_or_else(|| anyhow::anyhow!("no turn at index {turn_index}"))?;
+        if dart_index >= turn.darts.len() {
+            bail!("turn {turn_index} has no dart at index {dart_index}");
+        }
+        let before: usize = turns[..turn_index].iter().map(|t| t.darts.len()).sum();
+        let flat_index = before + dart_index;
+        let mut flat = self.flat();
+        flat[flat_index] = dart;
+        self.rebuild(flat);
+        Ok(())
     }
 
     /// Suggest a checkout for `remaining` under the configured out rule, if one
@@ -226,7 +286,8 @@ impl X01Game {
     }
 
     fn advance(&mut self) {
-        self.current_turn.clear();
+        // Preserve the finished turn so it can be shown and edited later.
+        self.committed.push(std::mem::take(&mut self.current_turn));
         self.turn_idx = (self.turn_idx + 1) % self.order.len();
         self.turn_start = self.state[&self.current_player()];
     }
@@ -427,5 +488,51 @@ mod tests {
     #[test]
     fn no_checkout_above_170() {
         assert!(suggest_checkout(171, OutRule::Double).is_none());
+    }
+
+    #[test]
+    fn undo_reopens_previous_turn() {
+        let r = roster2();
+        let ids = r.ids();
+        let mut g = X01Game::new(cfg(501, OutRule::Straight), &r).unwrap();
+        for _ in 0..3 {
+            g.throw(Score::single(5)).unwrap();
+        }
+        assert_eq!(g.current_player(), ids[1]); // p0's turn closed
+        let removed = g.undo_last_dart().unwrap().unwrap();
+        assert_eq!(removed, Score::single(5));
+        assert_eq!(g.current_player(), ids[0]); // reopened
+        assert_eq!(g.remaining(ids[0]), Some(501 - 10));
+        assert_eq!(g.current_turn().len(), 2);
+    }
+
+    #[test]
+    fn edit_past_turn_recomputes() {
+        let r = roster2();
+        let ids = r.ids();
+        let mut g = X01Game::new(cfg(501, OutRule::Straight), &r).unwrap();
+        for _ in 0..3 {
+            g.throw(Score::single(20)).unwrap(); // p0 -> 441
+        }
+        g.throw(Score::single(1)).unwrap(); // p1 -> 500
+                                            // Correct p0's first dart (turn 0, dart 0) from single-20 to treble-20.
+        g.edit_dart(0, 0, Score::treble(20)).unwrap();
+        assert_eq!(g.remaining(ids[0]), Some(501 - 60 - 20 - 20));
+        assert_eq!(g.remaining(ids[1]), Some(500)); // p1 untouched
+        let turns = g.turns();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].player, ids[0]);
+        assert_eq!(turns[0].darts.len(), 3);
+        assert_eq!(turns[1].player, ids[1]);
+        assert_eq!(g.current_player(), ids[1]);
+    }
+
+    #[test]
+    fn edit_rejects_out_of_range() {
+        let r = roster2();
+        let mut g = X01Game::new(cfg(501, OutRule::Double), &r).unwrap();
+        g.throw(Score::single(20)).unwrap();
+        assert!(g.edit_dart(5, 0, Score::single(1)).is_err());
+        assert!(g.edit_dart(0, 9, Score::single(1)).is_err());
     }
 }

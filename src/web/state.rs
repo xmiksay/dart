@@ -19,10 +19,11 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(db: DatabaseConnection) -> Self {
+    /// Build state around a specific session (used to resume a restored game).
+    pub fn with_session(db: DatabaseConnection, session: GameSession) -> Self {
         let (tx, _rx) = broadcast::channel(BROADCAST_CAPACITY);
         Self {
-            session: Arc::new(Mutex::new(GameSession::new())),
+            session: Arc::new(Mutex::new(session)),
             tx,
             db,
         }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed } from 'vue'
 import { useGameStore } from '@/stores/game'
 import type { Dart } from '@/api/protocol'
 import { dartLabel } from '@/utils/dart'
@@ -7,15 +7,39 @@ import DartPicker from './DartPicker.vue'
 
 const game = useGameStore()
 
-// null = manual throw (append); number = editing that dart of the current turn.
-const editIndex = ref<number | null>(null)
+// `turns` index of the in-progress turn, or -1 when none is live.
+const liveTurnIndex = computed(() =>
+  game.winnerId === null && game.currentPlayerId !== null
+    ? game.turns.length - 1
+    : -1,
+)
+
+// Is the current edit target a dart in the live turn?
+function isLiveEditing(dartIndex: number): boolean {
+  const t = game.editTarget
+  return t !== null && t.turnIndex === liveTurnIndex.value && t.dartIndex === dartIndex
+}
+
+const editLabel = computed(() => {
+  const t = game.editTarget
+  if (t === null) return 'Add dart'
+  const player = game.turns[t.turnIndex]?.player ?? null
+  const who = player === null ? '' : ` (${game.playerName(player)})`
+  return `Editing dart ${t.dartIndex + 1}${who}`
+})
+
+function toggleLive(dartIndex: number) {
+  if (isLiveEditing(dartIndex)) game.clearEditTarget()
+  else game.setEditTarget(liveTurnIndex.value, dartIndex)
+}
 
 function onPick(dart: Dart) {
-  if (editIndex.value === null) {
+  const t = game.editTarget
+  if (t === null) {
     game.throwDart(dart)
   } else {
-    game.editDart(editIndex.value, dart)
-    editIndex.value = null
+    game.editDart(t.turnIndex, t.dartIndex, dart)
+    game.clearEditTarget()
   }
 }
 </script>
@@ -37,8 +61,8 @@ function onPick(dart: Dart) {
       {{ game.lastError }} <span class="opacity-60">(dismiss)</span>
     </p>
 
-    <!-- Current turn: tap a dart to edit it. -->
-    <div>
+    <!-- Current turn: tap a dart to edit it (or tap any dart in the leg log). -->
+    <div v-if="liveTurnIndex >= 0">
       <p class="mb-2 text-sm uppercase text-slate-500">Current turn</p>
       <div class="flex gap-2">
         <button
@@ -46,11 +70,11 @@ function onPick(dart: Dart) {
           :key="i"
           class="flex-1 rounded-lg border-2 py-3 text-xl font-bold transition-colors"
           :class="
-            editIndex === i
+            isLiveEditing(i)
               ? 'border-accent-turn bg-board-bg text-accent-turn'
               : 'border-board-line bg-board-bg'
           "
-          @click="editIndex = editIndex === i ? null : i"
+          @click="toggleLive(i)"
         >
           {{ dartLabel(d) }}
         </button>
@@ -63,11 +87,19 @@ function onPick(dart: Dart) {
       </div>
     </div>
 
+    <p class="text-sm text-slate-500">
+      Tap any dart in the leg history to edit it.
+    </p>
+
     <p
       class="rounded-lg px-3 py-2 text-center text-lg font-semibold"
-      :class="editIndex === null ? 'bg-accent/15 text-accent' : 'bg-accent-turn/15 text-accent-turn'"
+      :class="
+        game.editTarget === null
+          ? 'bg-accent/15 text-accent'
+          : 'bg-accent-turn/15 text-accent-turn'
+      "
     >
-      {{ editIndex === null ? 'Add dart' : `Editing dart ${editIndex + 1}` }}
+      {{ editLabel }}
     </p>
 
     <DartPicker @pick="onPick" />

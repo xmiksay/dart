@@ -1,4 +1,12 @@
-import type { GameDetail, GameSummary, SavedPlayer } from './protocol'
+import type {
+  Calibration,
+  CalibrationPoints,
+  CalibrationResult,
+  CameraInfo,
+  GameDetail,
+  GameSummary,
+  SavedPlayer,
+} from './protocol'
 
 // Single place that all REST traffic flows through so base URL / headers / error
 // handling stay consistent. Same-origin in prod; Vite proxies /api in dev.
@@ -44,6 +52,14 @@ async function sendNoContent(method: string, path: string): Promise<void> {
   }
 }
 
+async function getBlob(path: string): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`)
+  if (!res.ok) {
+    throw new ApiError(res.status, `GET ${path} failed: ${res.status} ${res.statusText}`)
+  }
+  return res.blob()
+}
+
 export const api = {
   listGames(): Promise<GameSummary[]> {
     return getJson<GameSummary[]>('/games')
@@ -67,5 +83,19 @@ export const api = {
   },
   deletePlayer(id: string): Promise<void> {
     return sendNoContent('DELETE', `/players/${id}`)
+  },
+
+  // --- camera calibration (one-time, fixed camera) ---
+  listCameras(): Promise<CameraInfo[]> {
+    return getJson<CameraInfo[]>('/cameras')
+  },
+  cameraSnapshot(camera: number): Promise<Blob> {
+    return getBlob(`/camera/snapshot?camera=${camera}`)
+  },
+  getCalibration(): Promise<Calibration | null> {
+    return getJson<Calibration | null>('/calibration')
+  },
+  saveCalibration(points: CalibrationPoints): Promise<CalibrationResult> {
+    return sendJson<CalibrationResult>('POST', '/calibration', { points })
   },
 }

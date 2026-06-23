@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
+use super::calibration_routes::{camera_snapshot, get_calibration, list_cameras, post_calibration};
 use super::state::AppState;
 use super::static_files::static_handler;
 use super::ws::ws_handler;
@@ -25,6 +26,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/players/{id}",
             patch(rename_player).delete(delete_player),
+        )
+        // Browser-calibration endpoints; camera ones 501 without `capture`.
+        .route("/api/cameras", get(list_cameras))
+        .route("/api/camera/snapshot", get(camera_snapshot))
+        .route(
+            "/api/calibration",
+            get(get_calibration).post(post_calibration),
         )
         .with_state(state)
         // Everything else (assets + client routes) is served from the embedded
@@ -115,14 +123,15 @@ fn validated_name(name: String) -> Result<String, AppError> {
 
 /// A request failure. Internal errors are logged in full and surfaced as a
 /// generic 500; client errors carry an explicit status and safe public message.
-struct AppError {
+#[derive(Debug)]
+pub(super) struct AppError {
     status: StatusCode,
     public: String,
     internal: Option<anyhow::Error>,
 }
 
 impl AppError {
-    fn client(status: StatusCode, message: &str) -> Self {
+    pub(super) fn client(status: StatusCode, message: &str) -> Self {
         Self {
             status,
             public: message.to_string(),

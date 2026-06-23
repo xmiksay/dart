@@ -32,8 +32,8 @@ A **Player** is `{ "id": 0, "name": "Ann" }` (`id` is a u32).
 | `player_reorder` | `id, index` | move in turn order |
 | `game_new` | `mode`, `x01?`, `cricket?` | start a new game (see below) |
 | `throw` | `dart: Dart` | apply a dart for the current player |
-| `undo_last` | — | remove last dart of the in-progress turn |
-| `edit_dart` | `index: number, dart: Dart` | correct a dart in the current turn |
+| `undo_last` | — | remove the most recent dart anywhere in the leg (reopens the previous turn if the current one already closed; works after a win) |
+| `edit_dart` | `turn_index: number, dart_index: number, dart: Dart` | correct any dart in any turn — the engine replays the leg to recompute. `turn_index` indexes `GameState.turns` (the last entry is the in-progress turn) |
 | `end_turn` | — | force-advance to the next player |
 | `reset` | — | clear the game back to idle |
 
@@ -72,6 +72,9 @@ Errors:
   "players": [ { "id": 0, "name": "Ann" } ],
   "current_player_id": 0,            // null when idle
   "current_turn": [ /* Dart */ ],     // darts thrown so far this turn
+  "turns": [                          // full leg history, oldest first; the last
+    { "player": 0, "darts": [ /* Dart */ ] }   // entry is the in-progress turn
+  ],
   "winner_id": null,                  // PlayerId when the game is won
   "x01": {                            // present iff mode == "x01"
     "config": { "start": 501, "in_rule": "Straight", "out_rule": "Double" },
@@ -112,6 +115,25 @@ people, and the chosen names are pushed into the in-memory game roster via the
 `player_add` WS command. A newly typed name should also be POSTed to
 `/api/players` so it persists for next time. Finished-game records link each
 participant back to `players.id` (nullable FK) for future per-player stats.
+
+### Camera calibration (browser, one-time)
+
+A fixed camera is calibrated once by marking the four board points in a live
+frame. Camera endpoints require the server to be built with `--features capture`;
+without it they return 501. The calibration is stored on disk as
+`calibration.json` (the same file the CLI `calibrate`/`score-tip` and the capture
+loop use) — one shared source of truth.
+
+| method · path | body / query | returns |
+|---------------|--------------|---------|
+| `GET /api/cameras` | — | `[{ "index": 0, "name": "HD 1080P" }]` (501 if not built with capture) |
+| `GET /api/camera/snapshot?camera=N` | — | `image/png` of one frame (501 if no capture) |
+| `GET /api/calibration` | — | `{ "points": [[x,y],[x,y],[x,y],[x,y]] }` or `null` if none saved |
+| `POST /api/calibration` | `{ "points": [[x,y]×4] }` | `{ "ok": true, "centre": [bx,by] }` (board-mm centre, ≈ bull as a sanity check; 400 if the quad is degenerate) |
+
+The four points are in **canonical order**: 5&20 (top), 13&6 (right), 17&3
+(bottom), 8&11 (left), in image pixels (origin top-left). Build the homography
+with `dartscore::calibration::Calibration::new(points)` and persist via `.save()`.
 
 ## Static SPA serving (rust-embed, single binary)
 

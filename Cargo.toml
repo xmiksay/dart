@@ -40,14 +40,20 @@ sea-orm-migration = { version = "1.1", features = [
 ] }
 async-trait = "0.1"
 
+# Image handling — core (used by background-subtraction detection, scoring, capture).
+image = "0.25"
+
 # Detection (Phase 1: candle YOLOv8). Gated so the web/db builds stay light.
 candle-core = { version = "0.10", optional = true }
 candle-nn = { version = "0.10", optional = true }
-image = { version = "0.25", optional = true }
+
+# Camera capture (Phase 3). Gated — needs a platform camera (v4l on Linux).
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 
 [features]
 default = []
-detection = ["dep:candle-core", "dep:candle-nn", "dep:image"]
+detection = ["dep:candle-core", "dep:candle-nn"]
+capture = ["dep:nokhwa", "detection"]
 
 [profile.release]
 lto = true

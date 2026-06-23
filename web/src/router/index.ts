@@ -18,6 +18,11 @@ const router = createRouter({
       name: 'history',
       component: () => import('@/views/HistoryView.vue'),
     },
+    {
+      path: '/calibrate',
+      name: 'calibrate',
+      component: () => import('@/views/CalibrateView.vue'),
+    },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
