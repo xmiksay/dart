@@ -1,0 +1,17 @@
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Model artifacts (large; managed out-of-band or via git-lfs)
+/models/*.safetensors
+/models/*.pt
+
+# Python training env
+/python/.venv
+/python/__pycache__
+/python/runs
+/python/datasets
+
+# Frontend
+/web/node_modules
+/web/dist

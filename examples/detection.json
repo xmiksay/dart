@@ -1,0 +1,14 @@
+{
+  "_comment": "Synthetic frame: board scaled x1.5, centred at image (400,400), y-down. Tips: bull, treble-20, single-6. Expected total = 50 + 60 + 6 = 116.",
+  "calibration": [
+    { "x": 360.1, "y": 148.1 },
+    { "x": 651.9, "y": 360.1 },
+    { "x": 439.9, "y": 651.9 },
+    { "x": 148.1, "y": 439.9 }
+  ],
+  "tips": [
+    { "x": 400.0, "y": 400.0 },
+    { "x": 400.0, "y": 245.5 },
+    { "x": 475.0, "y": 400.0 }
+  ]
+}
