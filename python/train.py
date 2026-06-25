@@ -19,7 +19,8 @@ def main() -> None:
     ap.add_argument("--model", default="yolov8n.pt",
                     help="base weights to fine-tune (COCO-pretrained yolov8n)")
     ap.add_argument("--epochs", type=int, default=100)
-    ap.add_argument("--imgsz", type=int, default=800)
+    # Match candle's IMG_SIZE (src/detect/mod.rs) so train = inference = parity.
+    ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--device", default="0")
     ap.add_argument("--name", default="dartscore")
@@ -34,9 +35,11 @@ def main() -> None:
         device=args.device,
         name=args.name,
     )
-    # Ultralytics writes runs/detect/<name>/weights/best.pt
-    print("training complete — best weights at "
-          f"runs/detect/{args.name}/weights/best.pt")
+    # Report the ACTUAL save dir (Ultralytics auto-increments name on re-runs).
+    best = Path(model.trainer.save_dir) / "weights" / "best.pt"
+    print(f"\ntraining complete — best weights at {best}")
+    print(f"convert it:  python convert_to_safetensors.py --pt {best} "
+          f"--out ../models/dartscore.safetensors")
 
 
 if __name__ == "__main__":

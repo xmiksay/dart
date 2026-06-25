@@ -60,6 +60,7 @@ capture:
 		$(if $(SETTLE),--settle-frames $(SETTLE)) \
 		$(if $(BG_THRESHOLD),--bg-threshold $(BG_THRESHOLD)) \
 		$(if $(BG_MIN_AREA),--bg-min-area $(BG_MIN_AREA)) \
+		$(if $(BG_BLUR),--bg-blur $(BG_BLUR)) \
 		$(if $(EXPOSURE),--exposure $(EXPOSURE))
 
 # Tune background-subtraction detection on two saved frames (no camera needed):
@@ -68,7 +69,10 @@ capture:
 detect-bg:
 	cargo run -- detect-bg --reference "$(REFERENCE)" --frame "$(FRAME)" \
 		$(if $(THRESHOLD),--threshold $(THRESHOLD)) \
-		$(if $(MIN_AREA),--min-area $(MIN_AREA))
+		$(if $(MIN_AREA),--min-area $(MIN_AREA)) \
+		$(if $(DILATE),--dilate $(DILATE)) \
+		$(if $(BLUR),--blur $(BLUR)) \
+		$(if $(MASK),--debug-mask $(MASK))
 
 # List available cameras and their indices.
 cameras:

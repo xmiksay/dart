@@ -40,8 +40,20 @@ pub struct DartLocator {
     pub dilate: u32,
     /// Two tips within this many image pixels are the same dart (add/remove match).
     pub match_px: f64,
+    /// Gaussian blur sigma applied before diffing — suppresses sensor/focus
+    /// jitter (a noisy/auto-focus webcam) so only large changes (a dart) survive.
+    pub blur: f32,
     /// Tips of darts currently on the board (vs the empty reference).
     current: Vec<Point>,
+}
+
+/// Gaussian-blur a frame (no-op when `sigma <= 0`) to low-pass away noise.
+fn blurred(img: &GrayImage, sigma: f32) -> std::borrow::Cow<'_, GrayImage> {
+    if sigma <= 0.0 {
+        std::borrow::Cow::Borrowed(img)
+    } else {
+        std::borrow::Cow::Owned(image::imageops::blur(img, sigma))
+    }
 }
 
 /// What changed on the board between two settled frames.
@@ -65,6 +77,7 @@ impl DartLocator {
             empty_area: 60,
             dilate: 4,
             match_px: 40.0,
+            blur: 0.0,
             current: Vec::new(),
         }
     }
@@ -127,7 +140,9 @@ impl DartLocator {
         min_area: usize,
     ) -> Vec<Vec<(u32, u32)>> {
         let (w, h) = (frame.width(), frame.height());
-        let mask = diff_mask(frame, base, self.threshold);
+        let f = blurred(frame, self.blur);
+        let b = blurred(base, self.blur);
+        let mask = diff_mask(&f, &b, self.threshold);
         let mask = dilate(&mask, w as usize, h as usize, self.dilate);
         connected_components(&mask, w, h, min_area)
     }
@@ -185,7 +200,9 @@ impl DartLocator {
         if frame.dimensions() != self.reference.dimensions() {
             return GrayImage::new(w, h);
         }
-        let mask = diff_mask(frame, &self.last, self.threshold);
+        let f = blurred(frame, self.blur);
+        let b = blurred(&self.last, self.blur);
+        let mask = diff_mask(&f, &b, self.threshold);
         let mask = dilate(&mask, w as usize, h as usize, self.dilate);
         let buf: Vec<u8> = mask.iter().map(|&b| if b { 255 } else { 0 }).collect();
         GrayImage::from_raw(w, h, buf).unwrap_or_else(|| GrayImage::new(w, h))

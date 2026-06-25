@@ -8,6 +8,7 @@ Cargo.lock
 
 # Python training env
 /python/.venv
+/python/.venv312
 /python/__pycache__
 /python/runs
 /python/datasets
@@ -18,3 +19,11 @@ Cargo.lock
 
 # Captured frames (capture-only mode / training collection)
 /captures
+
+# Pi deployment bundle
+/dist
+
+# Training outputs and pretrained weights (large; kept out of git)
+/runs
+/labels.pkl
+/python/*.pt

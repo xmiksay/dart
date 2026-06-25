@@ -31,6 +31,7 @@ onBeforeUnmount(() => game.disconnect())
             { to: '/', label: 'Scoreboard' },
             { to: '/setup', label: 'Setup' },
             { to: '/history', label: 'History' },
+            { to: '/stats', label: 'Stats' },
             { to: '/calibrate', label: 'Calibrate' },
           ]"
           :key="link.to"

@@ -3,9 +3,10 @@ import type {
   CalibrationPoints,
   CalibrationResult,
   CameraInfo,
-  GameDetail,
+  GameState,
   GameSummary,
   SavedPlayer,
+  StatsResponse,
 } from './protocol'
 
 // Single place that all REST traffic flows through so base URL / headers / error
@@ -64,8 +65,12 @@ export const api = {
   listGames(): Promise<GameSummary[]> {
     return getJson<GameSummary[]>('/games')
   },
-  getGame(id: number): Promise<GameDetail> {
-    return getJson<GameDetail>(`/games/${id}`)
+  /** A finished game reconstructed as a full board state (replayed dart log). */
+  getGameState(id: string): Promise<GameState> {
+    return getJson<GameState>(`/games/${id}/state`)
+  },
+  getStats(): Promise<StatsResponse> {
+    return getJson<StatsResponse>('/stats')
   },
   health(): Promise<{ status: string }> {
     return getJson<{ status: string }>('/health')

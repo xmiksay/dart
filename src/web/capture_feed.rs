@@ -15,6 +15,7 @@ use super::protocol::Command;
 use super::state::AppState;
 
 const DEFAULT_BG_MIN_AREA: usize = 120;
+const DEFAULT_BG_BLUR: f32 = 3.0;
 
 /// Capture loop configuration, read from the environment. Thresholds left as
 /// `None` are auto-calibrated from the empty-board noise floor at startup.
@@ -23,6 +24,7 @@ struct CaptureConfig {
     exposure: Option<u32>,
     bg_threshold: Option<u8>,
     bg_min_area: usize,
+    bg_blur: f32,
 }
 
 /// Read capture config from the environment. Returns `None` (and starts no
@@ -45,6 +47,7 @@ fn config_from_env() -> Option<CaptureConfig> {
         exposure: parse_opt_env("DART_EXPOSURE"),
         bg_threshold: parse_opt_env("DART_BG_THRESHOLD"),
         bg_min_area: parse_env_or("DART_BG_MIN_AREA", DEFAULT_BG_MIN_AREA),
+        bg_blur: parse_env_or("DART_BG_BLUR", DEFAULT_BG_BLUR),
     })
 }
 
@@ -119,6 +122,7 @@ fn spawn_capture_thread(cfg: CaptureConfig, dart_tx: mpsc::UnboundedSender<Score
             5,    // settle_frames
             cfg.bg_threshold,
             cfg.bg_min_area,
+            cfg.bg_blur,
             cfg.exposure,
             Vec::new(), // extra controls
             on_dart,

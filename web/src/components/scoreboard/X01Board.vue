@@ -2,11 +2,15 @@
 import { computed } from 'vue'
 import { useGameStore } from '@/stores/game'
 import { dartLabel } from '@/utils/dart'
+import type { GameState } from '@/api/protocol'
 import RoundGrid from './RoundGrid.vue'
 
+// `source` provided => render that finished game; omitted => live game store.
+const props = defineProps<{ source?: GameState | null }>()
 const game = useGameStore()
 
-const x01 = computed(() => game.state.x01)
+const view = computed(() => props.source ?? game.state)
+const x01 = computed(() => view.value.x01)
 const checkoutLabel = computed(() =>
   x01.value?.checkout?.map(dartLabel).join(' ') ?? null,
 )
@@ -18,7 +22,7 @@ function remaining(id: number): number {
 
 <template>
   <div class="flex h-full flex-col p-4">
-    <RoundGrid>
+    <RoundGrid :source="props.source ?? null">
       <template #header="{ player, active }">
         <div class="px-2 py-2 text-center">
           <p

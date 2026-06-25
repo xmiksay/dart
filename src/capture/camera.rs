@@ -184,14 +184,27 @@ fn calibrate_noise(
     camera: &mut Camera,
     reference_gray: &GrayImage,
     frames: usize,
+    blur: f32,
 ) -> Result<(f32, u8)> {
+    // Motion (trigger) is measured on raw frames to match the live trigger;
+    // pixel noise (bgsub cutoff) is measured post-blur to match detection.
+    let ref_blur = if blur > 0.0 {
+        image::imageops::blur(reference_gray, blur)
+    } else {
+        reference_gray.clone()
+    };
     let mut prev = reference_gray.clone();
     let mut motion_floor = 0.0f32;
     let mut pixel_noise = 0u8;
     for _ in 0..frames {
         let gray = image::imageops::grayscale(&grab(camera)?);
         motion_floor = motion_floor.max(frame_motion(&prev, &gray));
-        pixel_noise = pixel_noise.max(crate::bgsub::noise_ceiling(reference_gray, &gray));
+        let fb = if blur > 0.0 {
+            image::imageops::blur(&gray, blur)
+        } else {
+            gray.clone()
+        };
+        pixel_noise = pixel_noise.max(crate::bgsub::noise_ceiling(&ref_blur, &fb));
         prev = gray;
     }
     Ok((motion_floor, pixel_noise))
@@ -213,6 +226,7 @@ pub fn run(
     settle_frames: u32,
     bg_threshold: Option<u8>,
     bg_min_area: usize,
+    bg_blur: f32,
     exposure: Option<u32>,
     extra_controls: Vec<String>,
     mut on_dart: impl FnMut(Score),
@@ -253,7 +267,7 @@ pub fn run(
     let need_auto = motion_on.is_none() || motion_off.is_none() || bg_threshold.is_none();
     let (motion_floor, pixel_noise) = if need_auto {
         tracing::info!("calibrating noise floor — keep the board EMPTY and still…");
-        calibrate_noise(&mut camera, &reference_gray, 25)?
+        calibrate_noise(&mut camera, &reference_gray, 25, bg_blur)?
     } else {
         (0.0, 0)
     };
@@ -274,6 +288,7 @@ pub fn run(
         let mut loc = DartLocator::new(reference_gray.clone());
         loc.threshold = resolved_bg;
         loc.min_area = bg_min_area;
+        loc.blur = bg_blur;
         loc
     });
 

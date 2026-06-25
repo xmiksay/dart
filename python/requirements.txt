@@ -1,7 +1,22 @@
-# Offline training / conversion toolchain (dev machine with NVIDIA GPU).
-# Not installed on the Raspberry Pi — only the safetensors artifact crosses over.
+# Offline training / conversion toolchain (dev machine). Not installed on the Pi
+# — only the safetensors artifact crosses over.
+#
+# IMPORTANT: install PyTorch SEPARATELY *before* this file, matched to your GPU.
+# Install torch AND torchvision TOGETHER from the same index so their versions
+# match (a mismatch gives "operator torchvision::nms does not exist"). Use a
+# Python version with wheels (3.12) — 3.13/3.14 have none yet, and do NOT mix a
+# system (pacman) torch with a pip torchvision.
+#
+#   AMD/ROCm:  pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
+#   NVIDIA:    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#   CPU only:  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#
+# Verify:  python -c "import torchvision; torchvision.ops.nms; \
+#            import torch; print(torch.cuda.is_available())"   # no error; True on GPU
+#
+# Then: pip install -r requirements.txt   (ultralytics sees torch/vision satisfied)
+
 ultralytics>=8.3.0
-torch>=2.2
 safetensors>=0.4.3
 pandas>=2.0
 numpy>=1.24

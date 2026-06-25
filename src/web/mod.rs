@@ -5,6 +5,7 @@
 mod calibration_routes;
 #[cfg(feature = "capture")]
 mod capture_feed;
+mod history;
 mod protocol;
 mod routes;
 mod session;

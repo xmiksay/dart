@@ -61,9 +61,27 @@ enum Command {
         /// Mask dilation radius (px) to merge a dart's fragments into one blob.
         #[arg(long, default_value_t = 4)]
         dilate: u32,
+        /// Gaussian blur sigma before diffing (suppresses sensor/focus noise).
+        #[arg(long, default_value_t = 3.0)]
+        blur: f32,
+        /// Write the change mask (white = changed) here, to see what's flagged.
+        #[arg(long)]
+        debug_mask: Option<PathBuf>,
     },
     /// Run YOLOv8 inference on an image (Phase 1; needs `--features detection`).
-    Detect { image: PathBuf },
+    Detect {
+        /// Image to detect (omit with --check).
+        image: Option<PathBuf>,
+        /// Weights file.
+        #[arg(long, default_value = "models/dartscore.safetensors")]
+        weights: PathBuf,
+        /// Print raw detections as JSON (for the parity harness).
+        #[arg(long)]
+        json: bool,
+        /// Only verify the weights load into the candle graph, then exit.
+        #[arg(long)]
+        check: bool,
+    },
     /// Capture from the camera and score live (Phase 3).
     Capture {
         /// Camera index to use (run with `--list` to see them).
@@ -94,6 +112,9 @@ enum Command {
         /// Background-subtraction minimum dart blob area in pixels.
         #[arg(long, default_value_t = 120)]
         bg_min_area: usize,
+        /// Gaussian blur sigma before diffing (suppresses noisy/auto-focus jitter).
+        #[arg(long, default_value_t = 3.0)]
+        bg_blur: f32,
         /// Lock the camera to manual exposure with this value (disables auto
         /// exposure/white-balance/gain). Set this so the background stays stable.
         #[arg(long)]
@@ -128,6 +149,8 @@ fn main() -> Result<()> {
             threshold,
             min_area,
             dilate,
+            blur,
+            debug_mask,
         } => cmd_detect_bg(
             &reference,
             &frame,
@@ -135,8 +158,15 @@ fn main() -> Result<()> {
             threshold,
             min_area,
             dilate,
+            blur,
+            debug_mask.as_deref(),
         ),
-        Command::Detect { image } => cmd_detect(&image),
+        Command::Detect {
+            image,
+            weights,
+            json,
+            check,
+        } => cmd_detect(image.as_deref(), &weights, json, check),
         Command::Capture {
             camera,
             list,
@@ -147,6 +177,7 @@ fn main() -> Result<()> {
             settle_frames,
             bg_threshold,
             bg_min_area,
+            bg_blur,
             exposure,
             ctrl,
         } => cmd_capture(CaptureOpts {
@@ -159,6 +190,7 @@ fn main() -> Result<()> {
             settle_frames,
             bg_threshold,
             bg_min_area,
+            bg_blur,
             exposure,
             ctrl,
         }),
@@ -170,12 +202,12 @@ fn main() -> Result<()> {
 }
 
 #[cfg(feature = "detection")]
-fn cmd_detect(image: &std::path::Path) -> Result<()> {
-    dartscore::detect::run(image)
+fn cmd_detect(image: Option<&Path>, weights: &Path, json: bool, check: bool) -> Result<()> {
+    dartscore::detect::run(weights, image, json, check)
 }
 
 #[cfg(not(feature = "detection"))]
-fn cmd_detect(_image: &std::path::Path) -> Result<()> {
+fn cmd_detect(_image: Option<&Path>, _weights: &Path, _json: bool, _check: bool) -> Result<()> {
     anyhow::bail!("detection is disabled; rebuild with `--features detection`")
 }
 
@@ -191,6 +223,7 @@ struct CaptureOpts {
     settle_frames: u32,
     bg_threshold: Option<u8>,
     bg_min_area: usize,
+    bg_blur: f32,
     exposure: Option<u32>,
     ctrl: Vec<String>,
 }
@@ -211,6 +244,7 @@ fn cmd_capture(o: CaptureOpts) -> Result<()> {
             o.settle_frames,
             o.bg_threshold,
             o.bg_min_area,
+            o.bg_blur,
             o.exposure,
             o.ctrl,
             |_dart| {},
@@ -276,6 +310,7 @@ fn cmd_score_tip(points: &str, calibration: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_detect_bg(
     reference: &Path,
     frame: &Path,
@@ -283,6 +318,8 @@ fn cmd_detect_bg(
     threshold: u8,
     min_area: usize,
     dilate: u32,
+    blur: f32,
+    debug_mask: Option<&Path>,
 ) -> Result<()> {
     let ref_img = image::open(reference)
         .with_context(|| format!("opening reference {}", reference.display()))?
@@ -298,6 +335,7 @@ fn cmd_detect_bg(
     loc.threshold = threshold;
     loc.min_area = min_area;
     loc.dilate = dilate;
+    loc.blur = blur;
     loc.empty_area = 1; // diagnostic: never suppress as "empty"
 
     let a = loc.analyze(&frame_img);
@@ -328,6 +366,16 @@ fn cmd_detect_bg(
             "(no {} — run `calibrate` to score the tips)",
             calibration.display()
         ),
+    }
+
+    if let Some(path) = debug_mask {
+        loc.change_mask(&frame_img)
+            .save(path)
+            .with_context(|| format!("saving mask {}", path.display()))?;
+        println!(
+            "wrote change mask -> {} (white = changed; look at the pattern)",
+            path.display()
+        );
     }
     Ok(())
 }

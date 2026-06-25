@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { api } from '@/api/client'
-import type { GameDetail, GameSummary } from '@/api/protocol'
+import type { GameState, GameSummary } from '@/api/protocol'
 
 /** Server state for finished games, fetched over REST. */
 export const useHistoryStore = defineStore('history', () => {
   const games = ref<GameSummary[]>([])
-  const selected = ref<GameDetail | null>(null)
+  // A finished game reconstructed as a full board snapshot for the grid view.
+  const board = ref<GameState | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
 
@@ -22,12 +23,12 @@ export const useHistoryStore = defineStore('history', () => {
     }
   }
 
-  async function loadGame(id: number) {
+  async function loadBoard(id: string) {
     loading.value = true
     error.value = null
-    selected.value = null
+    board.value = null
     try {
-      selected.value = await api.getGame(id)
+      board.value = await api.getGameState(id)
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'failed to load game'
     } finally {
@@ -35,9 +36,9 @@ export const useHistoryStore = defineStore('history', () => {
     }
   }
 
-  function clearSelected() {
-    selected.value = null
+  function clearBoard() {
+    board.value = null
   }
 
-  return { games, selected, loading, error, loadGames, loadGame, clearSelected }
+  return { games, board, loading, error, loadGames, loadBoard, clearBoard }
 })

@@ -7,11 +7,15 @@ state-dict keys (``model.<idx>.…``) must be renamed to the names candle's
 VarBuilder requests (``net.bN.…`` / ``fpn.nN.…`` / ``head.…``). This is the one
 place the "just swap the file" boundary needs attention.
 
-The index→name map below matches the candle `yolo-v8` example model definition.
-After converting, run a parity check (verify_detection.py + the Rust `detect`
-command) — if candle reports a missing/!shape tensor, reconcile the name here
-against src/detect.rs. Authoritative reference: the lmz/candle-yolo-v8 HF repo
-discussion.
+The index→name map below matches the vendored candle model (src/detect/model.rs):
+backbone `net.bN.M`, neck `fpn.nN` (Ultralytics indices 12/15/16/18/19/21), head
+`head.*`, and C2f's inner Bottleneck list `.m.` → `.bottleneck.`. ConvBlocks keep
+both `conv.weight` and `bn.*` — candle folds the BN at load time (`absorb_bn`), so
+both must be present and `num_batches_tracked` is dropped.
+
+After converting, **validate it loads into candle** (the authoritative check):
+    cargo run --features detection -- detect --check --weights ../models/dartscore.safetensors
+If candle reports a missing/shape-mismatched tensor, reconcile the name here.
 
 Usage:
     python convert_to_safetensors.py --pt runs/detect/dartscore/weights/best.pt \
@@ -47,11 +51,11 @@ def rename(key: str) -> str | None:
     idx = int(parts[1])
     if idx not in INDEX_MAP:
         return None  # weightless / unmapped layer
-    rest = ".".join(parts[2:])
+    full = f"{INDEX_MAP[idx]}." + ".".join(parts[2:])
     # C2f's inner Bottleneck ModuleList is `.m.` in Ultralytics, `.bottleneck.`
-    # in candle.
-    rest = rest.replace(".m.", ".bottleneck.")
-    return f"{INDEX_MAP[idx]}.{rest}"
+    # in candle. Replace on the FULL key so the leading `m.` (e.g. b2.0.m.0)
+    # has a preceding dot and actually matches.
+    return full.replace(".m.", ".bottleneck.")
 
 
 def load_state_dict(pt_path: Path) -> dict:
@@ -69,22 +73,38 @@ def main() -> None:
     args = ap.parse_args()
 
     sd = load_state_dict(args.pt)
-    out, dropped = {}, []
+    out, dropped, suspicious = {}, [], []
     for k, v in sd.items():
         nk = rename(k)
         if nk is None:
             dropped.append(k)
+            # A real weight (not num_batches_tracked) on a *mapped* layer that
+            # still dropped means a naming gap — surface it loudly.
+            if k.startswith("model.") and not k.endswith("num_batches_tracked"):
+                parts = k.split(".")
+                if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) in INDEX_MAP:
+                    suspicious.append(k)
             continue
         out[nk] = v.contiguous().to(torch.float32)
+
+    if not out:
+        raise SystemExit(
+            "no tensors mapped — is this an Ultralytics YOLOv8 .pt? "
+            f"sample keys: {list(sd)[:5]}"
+        )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     save_file(out, str(args.out))
     print(f"wrote {len(out)} tensors -> {args.out}")
-    if dropped:
-        print(f"dropped {len(dropped)} keys (weightless/untracked); "
-              f"sample: {dropped[:5]}")
-    print("NEXT: run the Rust parity check — `cargo run --features detection -- "
-          "detect <img>` must match verify_detection.py within ~1 px.")
+    print(f"dropped {len(dropped)} keys (weightless / num_batches_tracked)")
+    if suspicious:
+        print(f"WARNING: {len(suspicious)} real weights on mapped layers were "
+              f"dropped (naming gap?): {suspicious[:8]}")
+    print(
+        "NEXT: validate it loads into candle —\n"
+        f"  cargo run --features detection -- detect --check --weights {args.out}\n"
+        "then check parity:  python parity_check.py --weights <best.pt> <images...>"
+    )
 
 
 if __name__ == "__main__":

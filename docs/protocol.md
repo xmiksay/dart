@@ -94,9 +94,30 @@ Errors:
 ### Game history
 | method · path | returns |
 |---------------|---------|
-| `GET /api/games` | list of finished games (id, mode, players, winner, finished_at) |
-| `GET /api/games/{id}` | one game with its turns/darts |
+| `GET /api/games` | list of finished games — `{ id, mode, players: string[], winner: string \| null, finished_at }` (names are the persisted roster snapshot) |
+| `GET /api/games/{id}` | one raw game record with its `players`/`darts` rows |
+| `GET /api/games/{id}/state` | the finished game reconstructed as a full [`GameState`](#gamestate) by replaying its stored dart log — lets the SPA render any historical game on the same round-grid scoreboard as a live one |
 | `GET /api/health` | `{ "status": "ok" }` |
+
+### Statistics
+`GET /api/stats` returns X01 statistics over rolling windows (Cricket excluded):
+
+```jsonc
+{ "windows": [ {
+  "days": 7,                      // also 14, 30, 90
+  "games_played": 12,
+  "sixties": 41,                  // single darts worth 60 (treble 20)
+  "best_average_player":  { "name": "Ann", "average": 64.2, "games": 8, "darts": 207 } | null,
+  "best_winrate_player":  { "name": "Ann", "win_rate": 0.75, "wins": 6, "games": 8 } | null,
+  "best_game_average":    { "game_id": "uuid", "player": "Ann", "average": 91.0, "start": 501, "finished_at": "..." } | null,
+  "fewest_darts_game":    { "game_id": "uuid", "player": "Ann", "darts": 15, "start": 501, "finished_at": "..." } | null
+} ] }
+```
+
+Averages are the canonical 3-dart figure `scored / darts * 3` where
+`scored = start - remaining` (busts count their darts but credit nothing).
+`best_*_player` consider only saved players (linked `players.id`); `best_game_*`
+include guests.
 
 ### Persistent players ("player table")
 A DB-backed roster of known players that the setup screen picks from (separate
