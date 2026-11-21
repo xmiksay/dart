@@ -16,6 +16,11 @@ pub struct AppState {
     pub session: Arc<Mutex<GameSession>>,
     pub tx: broadcast::Sender<String>,
     pub db: DatabaseConnection,
+    /// Latest camera frame (PNG) published by the capture feed, so the browser
+    /// calibration snapshot can reuse it instead of opening the busy camera.
+    /// `None` until the feed runs.
+    #[cfg(feature = "capture")]
+    pub latest_frame: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -26,6 +31,8 @@ impl AppState {
             session: Arc::new(Mutex::new(session)),
             tx,
             db,
+            #[cfg(feature = "capture")]
+            latest_frame: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 }

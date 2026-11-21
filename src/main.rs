@@ -248,6 +248,7 @@ fn cmd_capture(o: CaptureOpts) -> Result<()> {
             o.exposure,
             o.ctrl,
             |_dart| {},
+            |_frame| {},
         )
     }
 }

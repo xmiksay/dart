@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="dartscore">
+  <rect width="512" height="512" rx="96" fill="#0b0f14"/>
+  <g transform="translate(256 256)">
+    <circle r="180" fill="none" stroke="#1e293b" stroke-width="36"/>
+    <circle r="120" fill="none" stroke="#334155" stroke-width="36"/>
+    <circle r="60" fill="none" stroke="#22c55e" stroke-width="20"/>
+    <circle r="20" fill="#ef4444"/>
+    <!-- dart -->
+    <line x1="150" y1="-150" x2="6" y2="-6" stroke="#e2e8f0" stroke-width="14" stroke-linecap="round"/>
+    <polygon points="150,-150 120,-156 156,-120" fill="#f59e0b"/>
+  </g>
+</svg>

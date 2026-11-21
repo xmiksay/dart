@@ -68,6 +68,7 @@ models/            safetensors artifact (git-ignored)
 | `make score-tip POINTS="x,y"` | score tip pixels vs `calibration.json` |
 | `make capture CAMERA=n [INTERVAL=s] [MOTION_ON=… MOTION_OFF=… SETTLE=…]` | live capture loop |
 | `make detect` / `build-capture` | build with detection / capture |
+| `make pi-package` / `pi-deploy [PI=user@host]` | bundle Pi binary + systemd units into `dist/pi/` / rsync it to the Pi (see `deploy/README.md`) |
 | `make cross` | cross-compile for the Pi (`ARM_CPU=cortex-a53` RPi3 / `cortex-a76` RPi5) |
 
 ## Subsystem notes

@@ -86,6 +86,25 @@ Then drop `models/dartscore.safetensors` on the Pi — `make capture` / `serve`
 auto-switch to the model (no code change), and per-frame calibration makes it
 tolerant of a non-rigid camera.
 
+## Troubleshooting (environment / GPU)
+
+- **`No matching distribution found for torch`** — your Python is too new. PyTorch
+  ships wheels up to ~3.12; 3.13/3.14 have none. Use a 3.12 env (miniforge, `uv
+  venv --python 3.12`, or pyenv).
+- **`operator torchvision::nms does not exist`** — torch/torchvision version
+  mismatch. Install them **together from the same index**, and don't mix a system
+  (pacman) torch with a pip torchvision.
+- **AMD ROCm, `HIP error: invalid device function` / `rocBLAS … TensileLibrary …
+  gfxNNNN`** — ROCm has no kernels for your exact GPU arch. Set the nearest
+  supported one: RDNA3 (gfx110x, e.g. **gfx1101**) → `export
+  HSA_OVERRIDE_GFX_VERSION=11.0.0`; RDNA2 (gfx103x) → `10.3.0`. Find your arch with
+  `rocminfo | grep -i gfx`. Persist it in `~/.bashrc`.
+- **`amdgpu.ids: No such file or directory`** — harmless (libdrm GPU-name DB);
+  `sudo pacman -S libdrm hwids` if the generic "AMD Radeon Graphics" name bothers you.
+- **`parity_check.py` aborts on rocBLAS** — it runs the reference on **CPU** by
+  default (`--device cpu`), matching candle (also CPU), so it doesn't need ROCm.
+- **Conversion** (`convert_to_safetensors.py`) is CPU-only — no GPU needed.
+
 ## Collecting & labeling your own frames (fixed camera)
 
 For best accuracy on *your* board, fine-tune on frames from your own camera. The

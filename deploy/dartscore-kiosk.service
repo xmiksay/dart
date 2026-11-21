@@ -1,0 +1,40 @@
+[Unit]
+Description=dartscore projector kiosk (cage + chromium)
+After=dartscore.service getty@tty1.service
+Wants=dartscore.service
+# cage owns tty1; without this the getty fights it for the console.
+Conflicts=getty@tty1.service
+# Give up rather than restart-loop when no display is attached.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=kiosk
+# pam_systemd gives the service a logind seat (seat0) so cage can take the DRM
+# device and set XDG_RUNTIME_DIR — without it cage cannot open the display.
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+# With no connected output wlroots has no vblank to throttle against and cage +
+# chromium free-run at ~100% of a core. Refuse to start unless HDMI is live.
+ExecStartPre=/bin/sh -c 'grep -qx connected /sys/class/drm/card*-HDMI-A-*/status'
+ExecStart=/usr/bin/cage -s -- /usr/bin/chromium \
+  --ozone-platform=wayland \
+  --kiosk \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --disable-features=Translate \
+  --check-for-update-interval=31536000 \
+  --autoplay-policy=no-user-gesture-required \
+  http://localhost:8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

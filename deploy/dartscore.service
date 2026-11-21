@@ -1,0 +1,25 @@
+[Unit]
+Description=dartscore — automatic dart scoring server
+Documentation=https://github.com/  (project README)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dartscore
+Group=dartscore
+# Camera access (v4l) for the capture feed:
+SupplementaryGroups=video
+WorkingDirectory=/opt/dartscore
+# DATABASE_URL, BIND_ADDR, DART_CAMERA, … live here (see dartscore.env.example):
+EnvironmentFile=/etc/dartscore.env
+ExecStart=/opt/dartscore/dartscore serve
+Restart=on-failure
+RestartSec=3
+# Hardening (relax if it blocks the camera/DB):
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

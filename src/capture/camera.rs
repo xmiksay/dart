@@ -128,10 +128,17 @@ fn apply_controls(index: u32, controls: &[String]) {
             .output();
         match result {
             Ok(o) if o.status.success() => tracing::info!("camera control set: {ctrl}"),
-            Ok(o) => tracing::warn!(
-                "v4l2-ctl --set-ctrl {ctrl} failed: {}",
-                String::from_utf8_lossy(&o.stderr).trim()
-            ),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                let err = err.trim();
+                // A camera simply not having a knob (e.g. no `gain`) is normal, not
+                // a problem — only flag genuine set failures.
+                if err.contains("unknown control") {
+                    tracing::debug!("camera has no '{ctrl}' control, skipping");
+                } else {
+                    tracing::warn!("v4l2-ctl --set-ctrl {ctrl} failed: {err}");
+                }
+            }
             Err(e) => {
                 tracing::warn!(
                     "could not run v4l2-ctl ({e}); install v4l-utils to lock the camera"
@@ -230,6 +237,7 @@ pub fn run(
     exposure: Option<u32>,
     extra_controls: Vec<String>,
     mut on_dart: impl FnMut(Score),
+    mut on_frame: impl FnMut(&RgbImage),
 ) -> Result<()> {
     let weights = Path::new("models/dartscore.safetensors");
     let detector = Detector::load(weights).ok();
@@ -240,7 +248,17 @@ pub fn run(
     } else {
         None
     };
-    std::fs::create_dir_all(CAPTURE_DIR).with_context(|| format!("creating {CAPTURE_DIR}/"))?;
+    // Frame saving is best-effort: a read-only/unwritable dir must NOT stop
+    // detection (scoring doesn't need saved frames).
+    let save_frames = match std::fs::create_dir_all(CAPTURE_DIR) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                "cannot write {CAPTURE_DIR}/ ({e}); frame saving disabled — detection still runs"
+            );
+            false
+        }
+    };
 
     let mut camera = open_camera(camera_index)?;
 
@@ -253,12 +271,14 @@ pub fn run(
     }
 
     // Empty-board reference (used for bgsub scoring and noise calibration). Saved
-    // so it can be diffed against saved throws for offline tuning (`detect-bg`).
+    // (best-effort) so it can be diffed against saved throws for offline tuning.
     let ref_rgb = grab(&mut camera)?;
-    let ref_path = format!("{CAPTURE_DIR}/reference.png");
-    match ref_rgb.save(&ref_path) {
-        Ok(()) => tracing::info!("saved empty-board reference -> {ref_path}"),
-        Err(e) => tracing::warn!("failed to save {ref_path}: {e}"),
+    if save_frames {
+        let ref_path = format!("{CAPTURE_DIR}/reference.png");
+        match ref_rgb.save(&ref_path) {
+            Ok(()) => tracing::info!("saved empty-board reference -> {ref_path}"),
+            Err(e) => tracing::warn!("failed to save {ref_path}: {e}"),
+        }
     }
     let reference_gray = image::imageops::grayscale(&ref_rgb);
 
@@ -317,6 +337,7 @@ pub fn run(
     );
     loop {
         let rgb = grab(&mut camera)?;
+        on_frame(&rgb); // publish for the browser snapshot (no-op for the CLI)
         let gray = image::imageops::grayscale(&rgb);
         let motion = prev.as_ref().map(|p| frame_motion(p, &gray)).unwrap_or(0.0);
 
@@ -330,15 +351,19 @@ pub fn run(
         // Time-based saving for framing checks, independent of the trigger.
         if let Some(iv) = interval {
             if last_interval_save.elapsed() >= iv {
-                shot += 1;
-                save_frame(&rgb, shot);
+                if save_frames {
+                    shot += 1;
+                    save_frame(&rgb, shot);
+                }
                 last_interval_save = Instant::now();
             }
         }
 
         if settle.update(motion) {
-            shot += 1;
-            save_frame(&rgb, shot);
+            if save_frames {
+                shot += 1;
+                save_frame(&rgb, shot);
+            }
             let darts = match (&detector, &calibration, &mut locator) {
                 (Some(det), _, _) => score_frame(det, &rgb, &mut last_tip_count),
                 (None, Some(cal), Some(loc)) => score_bgsub(loc, &gray, cal),
