@@ -145,6 +145,11 @@ frames). Background subtraction is a bridge for a fixed camera; tune
 | `test` / `unit` / `integration` | Tests (all / lib / `tests/`) |
 | `lint` / `fmt` / `fmt-check` | clippy `-D warnings` / rustfmt |
 | `cross` | Cross-compile for the Pi (`ARM_CPU=cortex-a53` RPi3 / `cortex-a76` RPi5) |
+| `pi-package` | Bundle the arm64 release: single binary (SPA embedded) + systemd units (server + projector kiosk) + env example → `dist/pi/` |
+| `pi-deploy PI=user@host` | rsync the bundle to the Pi (then restart the service) |
+
+Raspberry Pi deployment (systemd, single-binary, installable PWA): see
+[`deploy/README.md`](deploy/README.md).
 
 Detection training/conversion lives in `python/` (see `python/README.md`); the
 single artifact crossing to the Pi is `models/dartscore.safetensors`. candle on

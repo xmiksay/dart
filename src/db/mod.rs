@@ -4,6 +4,7 @@
 pub mod entities;
 pub mod migration;
 pub mod repository;
+pub mod stats;
 
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;

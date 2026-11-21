@@ -21,6 +21,21 @@ use std::path::Path;
 pub const NUM_CLASSES: usize = 5;
 const CLASS_DART: usize = 4;
 
+/// Class names, in index order (matches python/data.yaml).
+pub const CLASS_NAMES: [&str; NUM_CLASSES] =
+    ["cal_top", "cal_right", "cal_bottom", "cal_left", "dart"];
+
+/// A single raw detection in original-image pixels — the parity unit compared
+/// against the Python reference (`python/verify_detection.py`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RawDetection {
+    pub class: usize,
+    pub name: &'static str,
+    pub cx: f64,
+    pub cy: f64,
+    pub conf: f32,
+}
+
 /// Inference input size (multiple of 32). For best parity, match the training
 /// `imgsz`; the network is fully convolutional so any multiple of 32 works.
 const IMG_SIZE: usize = 640;
@@ -168,31 +183,40 @@ impl Detector {
         Ok(Self { model, device })
     }
 
-    /// Detect on an in-memory RGB frame, returning calibration points + tips in
-    /// original-image pixels (origin top-left).
-    pub fn detect(&self, img: &RgbImage) -> Result<Detection> {
+    /// Raw detections (all classes, with confidence) in original-image pixels —
+    /// the parity unit compared against the Python reference.
+    pub fn detect_raw(&self, img: &RgbImage) -> Result<Vec<RawDetection>> {
         let lb = letterbox(img, &self.device)?;
         let pred = self.model.forward(&lb.tensor)?;
         let dets = nms(decode(&pred)?);
+        Ok(dets
+            .into_iter()
+            .map(|d| RawDetection {
+                class: d.class,
+                name: CLASS_NAMES.get(d.class).copied().unwrap_or("?"),
+                cx: ((d.cx - lb.pad_x) / lb.scale) as f64,
+                cy: ((d.cy - lb.pad_y) / lb.scale) as f64,
+                conf: d.conf,
+            })
+            .collect())
+    }
 
-        // Map a letterboxed centre back to the original image.
-        let to_orig = |cx: f32, cy: f32| {
-            Point::new(
-                ((cx - lb.pad_x) / lb.scale) as f64,
-                ((cy - lb.pad_y) / lb.scale) as f64,
-            )
-        };
+    /// Detect on an in-memory RGB frame, returning calibration points + tips in
+    /// original-image pixels (origin top-left).
+    pub fn detect(&self, img: &RgbImage) -> Result<Detection> {
+        let raw = self.detect_raw(img)?;
 
         // One best detection per calibration class (0..=3), in canonical order.
         let mut calibration = [None; 4];
         let mut tips = Vec::new();
-        for d in &dets {
+        for d in &raw {
+            let p = Point::new(d.cx, d.cy);
             if d.class == CLASS_DART {
-                tips.push((d.conf, to_orig(d.cx, d.cy)));
+                tips.push((d.conf, p));
             } else if d.class < 4 {
                 let slot = &mut calibration[d.class];
                 if slot.is_none_or(|(c, _)| d.conf > c) {
-                    *slot = Some((d.conf, to_orig(d.cx, d.cy)));
+                    *slot = Some((d.conf, p));
                 }
             }
         }
@@ -226,15 +250,44 @@ fn collect_calibration(slots: [Option<(f32, Point)>; 4]) -> Result<[Point; 4]> {
     Ok(pts)
 }
 
-/// CLI entry: detect and print the points.
-pub fn run(image: &Path) -> Result<()> {
-    let weights = Path::new("models/dartscore.safetensors");
-    let det = detect_image(weights, image)?;
-    for (i, p) in det.calibration.iter().enumerate() {
-        println!("calib[{i}]: ({:.1}, {:.1})", p.x, p.y);
+/// CLI entry for `detect`.
+///
+/// - `check`: just verify the weights load into the candle YOLOv8n graph (the
+///   conversion sanity check — no image needed).
+/// - `json`: print raw detections as JSON (for the parity harness).
+/// - otherwise: print the calibration points + tips.
+pub fn run(weights: &Path, image: Option<&Path>, json: bool, check: bool) -> Result<()> {
+    let detector = Detector::load(weights)?;
+    if check {
+        println!(
+            "OK: weights at {} load into the YOLOv8n graph (nc={})",
+            weights.display(),
+            NUM_CLASSES
+        );
+        return Ok(());
     }
-    for (i, p) in det.tips.iter().enumerate() {
-        println!("tip[{i}]:   ({:.1}, {:.1})", p.x, p.y);
+
+    let image = image.ok_or_else(|| anyhow!("an image path is required (or use --check)"))?;
+    let img = image::open(image)
+        .with_context(|| format!("opening image {}", image.display()))?
+        .to_rgb8();
+    let raw = detector.detect_raw(&img)?;
+
+    if json {
+        let out = serde_json::json!({
+            "image": image.display().to_string(),
+            "width": img.width(),
+            "height": img.height(),
+            "detections": raw,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        for d in &raw {
+            println!(
+                "{:10} ({:7.1},{:7.1}) conf={:.3}",
+                d.name, d.cx, d.cy, d.conf
+            );
+        }
     }
     Ok(())
 }

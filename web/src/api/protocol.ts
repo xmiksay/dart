@@ -116,21 +116,66 @@ export type ServerEvent = StateEvent | ErrorEvent
 
 // --- REST (game history) ---------------------------------------------------
 
+/** Summary row from `GET /api/games`. Player names and winner are plain
+ * strings (the persisted roster snapshot), not in-game Player objects. */
 export interface GameSummary {
-  id: number
+  id: string
   mode: GameMode
-  players: Player[]
-  winner: Player | null
+  players: string[]
+  winner: string | null
   finished_at: string
 }
 
-export interface GameTurn {
-  player_id: PlayerId
-  darts: Dart[]
+// A finished game's full board is fetched as a reconstructed `GameState` from
+// `GET /api/games/{id}/state`, so it renders on the same scoreboard as a live
+// game. See `GameState` above.
+
+// --- REST (statistics) -----------------------------------------------------
+
+export interface PlayerAvg {
+  name: string
+  average: number
+  games: number
+  darts: number
 }
 
-export interface GameDetail extends GameSummary {
-  turns: GameTurn[]
+export interface PlayerWinRate {
+  name: string
+  win_rate: number
+  wins: number
+  games: number
+}
+
+export interface GameAvg {
+  game_id: string
+  player: string
+  average: number
+  start: number
+  finished_at: string
+}
+
+export interface GameLeg {
+  game_id: string
+  player: string
+  darts: number
+  start: number
+  finished_at: string
+}
+
+/** X01 stats for one rolling window (mirrors `db::stats::WindowStats`). */
+export interface WindowStats {
+  days: number
+  games_played: number
+  /** Single darts worth 60 (treble 20) thrown across the window. */
+  sixties: number
+  best_average_player: PlayerAvg | null
+  best_winrate_player: PlayerWinRate | null
+  best_game_average: GameAvg | null
+  fewest_darts_game: GameLeg | null
+}
+
+export interface StatsResponse {
+  windows: WindowStats[]
 }
 
 // --- REST (persistent players) ---------------------------------------------

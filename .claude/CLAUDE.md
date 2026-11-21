@@ -68,6 +68,7 @@ models/            safetensors artifact (git-ignored)
 | `make score-tip POINTS="x,y"` | score tip pixels vs `calibration.json` |
 | `make capture CAMERA=n [INTERVAL=s] [MOTION_ON=… MOTION_OFF=… SETTLE=…]` | live capture loop |
 | `make detect` / `build-capture` | build with detection / capture |
+| `make pi-package` / `pi-deploy [PI=user@host]` | bundle Pi binary + systemd units into `dist/pi/` / rsync it to the Pi (see `deploy/README.md`) |
 | `make cross` | cross-compile for the Pi (`ARM_CPU=cortex-a53` RPi3 / `cortex-a76` RPi5) |
 
 ## Subsystem notes
@@ -79,7 +80,7 @@ models/            safetensors artifact (git-ignored)
 
 ## Phase status
 
-- ✅ Geometry/homography/scoring · game engine (X01 301–901 + dbl/tpl in/out, Cricket + cut-throat, roster, replay-based edit/undo) · web + WS + SeaORM/Postgres (history, players, live-session restore) · Vue SPA (round-grid scoreboard, manual correction, history, saved players) · rust-embed single binary · manual calibration (CLI + browser) · capture trigger.
+- ✅ Geometry/homography/scoring · game engine (X01 301–901 + dbl/tpl in/out, Cricket + cut-throat, roster, replay-based edit/undo) · web + WS + SeaORM/Postgres (history, players, live-session restore) · Vue SPA (round-grid scoreboard, manual correction, history, saved players, X01 stats over 7/14/30/90-day windows, historical-game replay onto the grid scoreboard) · rust-embed single binary · manual calibration (CLI + browser) · capture trigger.
 - ⏳ Needs the user's GPU/hardware: train weights + Phase-1 parity run; live-capture threshold tuning on the real board; Phase 5 retrain loop.
 
 ## Conventions (in addition to the workspace `CLAUDE.md`)

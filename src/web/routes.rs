@@ -22,6 +22,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/games", get(list_games))
         .route("/api/games/{id}", get(get_game))
+        .route("/api/games/{id}/state", get(get_game_state))
+        .route("/api/stats", get(get_stats))
         .route("/api/players", get(list_players).post(create_player))
         .route(
             "/api/players/{id}",
@@ -57,6 +59,26 @@ async fn get_game(
         Some(game) => Ok(Json(serde_json::to_value(game)?).into_response()),
         None => Err(AppError::client(StatusCode::NOT_FOUND, "game not found")),
     }
+}
+
+/// Reconstruct a finished game's full `GameState` (by replaying its dart log) so
+/// the SPA can render it on the same round-grid scoreboard as a live game.
+async fn get_game_state(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Result<Response, AppError> {
+    match repository::get_game(&state.db, id).await? {
+        Some(detail) => {
+            let game_state = super::history::reconstruct_state(&detail)?;
+            Ok(Json(serde_json::to_value(game_state)?).into_response())
+        }
+        None => Err(AppError::client(StatusCode::NOT_FOUND, "game not found")),
+    }
+}
+
+async fn get_stats(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
+    let stats = crate::db::stats::compute_stats(&state.db).await?;
+    Ok(Json(serde_json::to_value(stats)?))
 }
 
 #[derive(Deserialize)]

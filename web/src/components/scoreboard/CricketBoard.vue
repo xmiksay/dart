@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useGameStore } from '@/stores/game'
+import type { GameState } from '@/api/protocol'
 import RoundGrid from './RoundGrid.vue'
 
+// `source` provided => render that finished game; omitted => live game store.
+const props = defineProps<{ source?: GameState | null }>()
 const game = useGameStore()
 
 // Marks order left-to-right; 25 is the bull.
 const TARGETS = [20, 19, 18, 17, 16, 15, 25] as const
 
-const cricket = computed(() => game.state.cricket)
+const view = computed(() => props.source ?? game.state)
+const cricket = computed(() => view.value.cricket)
 
 function targetLabel(n: number): string {
   return n === 25 ? 'B' : String(n)
@@ -30,7 +34,7 @@ function markGlyph(count: number): string {
 
 <template>
   <div class="flex h-full flex-col p-4">
-    <RoundGrid>
+    <RoundGrid :source="props.source ?? null">
       <template #header="{ player, active }">
         <div class="px-2 py-2">
           <div class="flex items-baseline justify-between gap-2">

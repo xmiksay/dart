@@ -1,33 +1,40 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useGameStore } from '@/stores/game'
+import { useBoardSource } from '@/composables/boardSource'
 import { dartLabel } from '@/utils/dart'
-import type { Turn } from '@/api/protocol'
+import type { GameState, Turn } from '@/api/protocol'
 
 /**
  * Unified round-grid: columns are players (roster order), rows are rounds.
- * Each cell holds a player's three darts for that round and stays editable.
+ * Each cell holds a player's three darts for that round. With no `source` it
+ * binds to the live game store and stays editable; given a `source` snapshot
+ * (history view) it renders that finished game read-only.
  *
  * Cell mapping (n = player count): the engine appends one turn per player per
  * round in roster order, so the flat `turns` array index for (round r, column
  * c) is `r * n + c`. That same index is the `turn_index` for `edit_dart`; the
  * dart's position in the cell is its `dart_index`.
  */
-const game = useGameStore()
+const props = defineProps<{ source?: GameState | null }>()
 
-const players = computed(() => game.players)
+const { isLive, state, editTarget, selectDart: pickDart } = useBoardSource(
+  () => props.source,
+)
+
+const players = computed(() => state.value.players)
+const turns = computed(() => state.value.turns)
 const n = computed(() => players.value.length)
 
 // Round count = ceil(turns / players); the last round may be partially filled.
 const roundCount = computed(() =>
-  n.value === 0 ? 0 : Math.ceil(game.turns.length / n.value),
+  n.value === 0 ? 0 : Math.ceil(turns.value.length / n.value),
 )
 const rounds = computed(() => Array.from({ length: roundCount.value }, (_, r) => r))
 
 // The in-progress cell is the last `turns` entry while the leg is live.
 const liveIndex = computed(() =>
-  game.winnerId === null && game.currentPlayerId !== null
-    ? game.turns.length - 1
+  state.value.winner_id === null && state.value.current_player_id !== null
+    ? turns.value.length - 1
     : -1,
 )
 
@@ -36,7 +43,7 @@ function turnIndex(round: number, col: number): number {
 }
 
 function cellTurn(round: number, col: number): Turn | undefined {
-  return game.turns[turnIndex(round, col)]
+  return turns.value[turnIndex(round, col)]
 }
 
 function turnTotal(turn: Turn): number {
@@ -44,7 +51,7 @@ function turnTotal(turn: Turn): number {
 }
 
 function isCurrentColumn(col: number): boolean {
-  return players.value[col]?.id === game.currentPlayerId
+  return players.value[col]?.id === state.value.current_player_id
 }
 
 function isLiveCell(round: number, col: number): boolean {
@@ -52,15 +59,14 @@ function isLiveCell(round: number, col: number): boolean {
 }
 
 function isEditing(round: number, col: number, dartIndex: number): boolean {
-  const t = game.editTarget
+  const t = editTarget.value
   return (
     t !== null && t.turnIndex === turnIndex(round, col) && t.dartIndex === dartIndex
   )
 }
 
 function selectDart(round: number, col: number, dartIndex: number) {
-  if (isEditing(round, col, dartIndex)) game.clearEditTarget()
-  else game.setEditTarget(turnIndex(round, col), dartIndex)
+  pickDart(turnIndex(round, col), dartIndex)
 }
 </script>
 
@@ -111,12 +117,14 @@ function selectDart(round: number, col: number, dartIndex: number) {
               <button
                 v-for="(d, dartIndex) in cellTurn(round, col)!.darts"
                 :key="dartIndex"
+                :disabled="!isLive"
                 class="min-w-0 flex-1 rounded border py-1 text-center text-5xl font-black leading-tight transition-colors"
-                :class="
+                :class="[
                   isEditing(round, col, dartIndex)
                     ? 'border-accent-turn bg-accent-turn/25 text-accent-turn'
-                    : 'border-board-line bg-board-bg/60 text-slate-100 hover:border-accent'
-                "
+                    : 'border-board-line bg-board-bg/60 text-slate-100',
+                  isLive ? 'hover:border-accent' : 'cursor-default',
+                ]"
                 @click="selectDart(round, col, dartIndex)"
               >
                 {{ dartLabel(d) }}

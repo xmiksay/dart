@@ -6,6 +6,10 @@
 //! persistence, and the `state` broadcast all run unchanged. A missing or busy
 //! camera logs an error and exits its thread; the web server keeps running.
 
+use std::io::Cursor;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
 use anyhow::Context;
 use tokio::sync::mpsc;
 
@@ -14,7 +18,13 @@ use crate::geometry::Score;
 use super::protocol::Command;
 use super::state::AppState;
 
+/// Shared latest-frame buffer (PNG bytes) for the browser snapshot.
+type FrameBuf = Arc<Mutex<Option<Vec<u8>>>>;
+/// How often the feed republishes a frame for the snapshot endpoint.
+const FRAME_PUBLISH_EVERY: Duration = Duration::from_millis(500);
+
 const DEFAULT_BG_MIN_AREA: usize = 120;
+const DEFAULT_BG_BLUR: f32 = 3.0;
 
 /// Capture loop configuration, read from the environment. Thresholds left as
 /// `None` are auto-calibrated from the empty-board noise floor at startup.
@@ -23,6 +33,7 @@ struct CaptureConfig {
     exposure: Option<u32>,
     bg_threshold: Option<u8>,
     bg_min_area: usize,
+    bg_blur: f32,
 }
 
 /// Read capture config from the environment. Returns `None` (and starts no
@@ -45,6 +56,7 @@ fn config_from_env() -> Option<CaptureConfig> {
         exposure: parse_opt_env("DART_EXPOSURE"),
         bg_threshold: parse_opt_env("DART_BG_THRESHOLD"),
         bg_min_area: parse_env_or("DART_BG_MIN_AREA", DEFAULT_BG_MIN_AREA),
+        bg_blur: parse_env_or("DART_BG_BLUR", DEFAULT_BG_BLUR),
     })
 }
 
@@ -95,19 +107,42 @@ pub fn start(state: AppState) {
     // capture thread never awaits/blocks on a full queue.
     let (dart_tx, dart_rx) = mpsc::unbounded_channel::<Score>();
 
-    spawn_capture_thread(cfg, dart_tx);
+    let frame_buf = state.latest_frame.clone();
+    spawn_capture_thread(cfg, dart_tx, frame_buf);
     tokio::spawn(consume_darts(state, dart_rx));
 }
 
 /// Spawn the blocking detection loop on a dedicated OS thread. The capture API
 /// is synchronous, so it must never run on the async runtime.
-fn spawn_capture_thread(cfg: CaptureConfig, dart_tx: mpsc::UnboundedSender<Score>) {
+fn spawn_capture_thread(
+    cfg: CaptureConfig,
+    dart_tx: mpsc::UnboundedSender<Score>,
+    frame_buf: FrameBuf,
+) {
     std::thread::spawn(move || {
         // `send` on a closed channel only happens if the applier task is gone
         // (server shutdown); nothing to do but drop the dart.
         let on_dart = move |dart: Score| {
             if dart_tx.send(dart).is_err() {
                 tracing::debug!("dart channel closed; dropping detected dart");
+            }
+        };
+
+        // Publish a throttled PNG of the live frame so the browser snapshot can
+        // reuse it (the camera is exclusively held by this loop).
+        let mut last_pub = Instant::now();
+        let mut first = true;
+        let on_frame = move |rgb: &image::RgbImage| {
+            if !first && last_pub.elapsed() < FRAME_PUBLISH_EVERY {
+                return;
+            }
+            first = false;
+            last_pub = Instant::now();
+            let mut buf = Cursor::new(Vec::new());
+            if rgb.write_to(&mut buf, image::ImageFormat::Png).is_ok() {
+                if let Ok(mut slot) = frame_buf.lock() {
+                    *slot = Some(buf.into_inner());
+                }
             }
         };
 
@@ -119,9 +154,11 @@ fn spawn_capture_thread(cfg: CaptureConfig, dart_tx: mpsc::UnboundedSender<Score
             5,    // settle_frames
             cfg.bg_threshold,
             cfg.bg_min_area,
+            cfg.bg_blur,
             cfg.exposure,
             Vec::new(), // extra controls
             on_dart,
+            on_frame,
         )
         .with_context(|| format!("camera capture loop (camera {})", cfg.camera_index));
 

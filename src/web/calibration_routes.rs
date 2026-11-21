@@ -9,6 +9,8 @@
 use std::path::Path;
 
 use axum::extract::Query;
+#[cfg(feature = "capture")]
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::Json;
 #[cfg(feature = "capture")]
@@ -17,6 +19,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::routes::AppError;
+#[cfg(feature = "capture")]
+use super::state::AppState;
 use crate::calibration::Calibration;
 use crate::Point;
 
@@ -62,16 +66,24 @@ pub async fn list_cameras() -> AppError {
 }
 
 /// `GET /api/camera/snapshot?camera=N` — one PNG frame (capture build only).
+///
+/// Prefers the live capture feed's latest frame (the feed holds the camera
+/// exclusively, so opening it again would fail); only opens the device directly
+/// when no feed is running (`DART_CAMERA` unset).
 #[cfg(feature = "capture")]
-pub async fn camera_snapshot(Query(q): Query<SnapshotQuery>) -> Result<Response, AppError> {
-    // A capture failure means the camera is busy or missing — surface a clean
-    // 503 with a generic message; never leak the raw device/driver error.
-    let png = crate::capture::snapshot_png(q.camera).map_err(|_| {
-        AppError::client(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "could not capture from camera (busy or unavailable)",
-        )
-    })?;
+pub async fn camera_snapshot(
+    State(state): State<AppState>,
+    Query(q): Query<SnapshotQuery>,
+) -> Result<Response, AppError> {
+    let png = match state.latest_frame.lock().ok().and_then(|g| g.clone()) {
+        Some(frame) => frame,
+        None => crate::capture::snapshot_png(q.camera).map_err(|_| {
+            AppError::client(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "could not capture from camera (busy or unavailable)",
+            )
+        })?,
+    };
     Ok(([(axum::http::header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 

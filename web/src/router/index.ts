@@ -19,6 +19,16 @@ const router = createRouter({
       component: () => import('@/views/HistoryView.vue'),
     },
     {
+      path: '/history/:id',
+      name: 'game-detail',
+      component: () => import('@/views/GameDetailView.vue'),
+    },
+    {
+      path: '/stats',
+      name: 'stats',
+      component: () => import('@/views/StatsView.vue'),
+    },
+    {
       path: '/calibrate',
       name: 'calibrate',
       component: () => import('@/views/CalibrateView.vue'),
